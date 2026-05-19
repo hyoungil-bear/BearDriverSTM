@@ -217,20 +217,21 @@ void USART2_IRQHandler(void)
     __HAL_UART_CLEAR_FLAG(&huart2, UART_CLEAR_PEF);
   }
 
-  /* RXNE: read received byte and pass to SCI buffer */
-  if (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_RXNE) &&
-      __HAL_UART_GET_IT_SOURCE(&huart2, UART_IT_RXNE)) {
-    uint8_t data = (uint8_t)(huart2.Instance->RDR & 0xFFU);
-    SCI_RxCallback(SCI_A_FD, data);
+  /* RXNE: drain all available bytes from RX FIFO in one ISR entry */
+  if (__HAL_UART_GET_IT_SOURCE(&huart2, UART_IT_RXNE)) {
+    while (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_RXNE)) {
+      uint8_t data = (uint8_t)(huart2.Instance->RDR & 0xFFU);
+      SCI_RxCallback(SCI_A_FD, data);
+    }
   }
 
-  /* TXE: transmit next byte from SCI buffer */
-  if (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_TXE) &&
-      __HAL_UART_GET_IT_SOURCE(&huart2, UART_IT_TXE)) {
+  /* TXFT: TX FIFO threshold — fill up to 8 bytes per interrupt */
+  if (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_TXFT) &&
+      __HAL_UART_GET_IT_SOURCE(&huart2, UART_IT_TXFT)) {
     SCI_TxCallback(SCI_A_FD);
   }
 
-  return;  /* Skip HAL generic handler -- SCI manages its own buffers */
+  return;  /* Skip HAL generic handler — SCI manages its own buffers */
   /* USER CODE END USART2_IRQn 0 */
   HAL_UART_IRQHandler(&huart2);
   /* USER CODE BEGIN USART2_IRQn 1 */
@@ -260,16 +261,17 @@ void USART3_IRQHandler(void)
     __HAL_UART_CLEAR_FLAG(&huart3, UART_CLEAR_PEF);
   }
 
-  /* RXNE: read received byte and pass to SCI buffer */
-  if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_RXNE) &&
-      __HAL_UART_GET_IT_SOURCE(&huart3, UART_IT_RXNE)) {
-    uint8_t data = (uint8_t)(huart3.Instance->RDR & 0xFFU);
-    SCI_RxCallback(SCI_B_FD, data);
+  /* RXNE: drain all available bytes from RX FIFO in one ISR entry */
+  if (__HAL_UART_GET_IT_SOURCE(&huart3, UART_IT_RXNE)) {
+    while (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_RXNE)) {
+      uint8_t data = (uint8_t)(huart3.Instance->RDR & 0xFFU);
+      SCI_RxCallback(SCI_B_FD, data);
+    }
   }
 
-  /* TXE: transmit next byte from SCI buffer */
-  if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_TXE) &&
-      __HAL_UART_GET_IT_SOURCE(&huart3, UART_IT_TXE)) {
+  /* TXFT: TX FIFO threshold — fill up to 8 bytes per interrupt */
+  if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_TXFT) &&
+      __HAL_UART_GET_IT_SOURCE(&huart3, UART_IT_TXFT)) {
     SCI_TxCallback(SCI_B_FD);
   }
 

@@ -20,6 +20,8 @@
 #include "api.h"
 #include "crc.h"
 #include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 /** @addtogroup BearDriver
   * @{
@@ -39,22 +41,26 @@
 
 /**
   * @brief  Receive ISR buffers (circular)
+  * @note   uint8_t: each slot holds exactly one received byte.
+  *         uint16_t was a bug — memcpy into BasePacket_t read interleaved zeros.
   */
-static volatile uint16_t rx_isr_buffer[2][SIZE_RX_BUFFER];
-static volatile uint16_t rx_isr_in_idx[2] = {0, 0};
-static volatile uint16_t rx_isr_out_idx[2] = {0, 0};
+static volatile uint8_t rx_isr_buffer[2][SIZE_RX_BUFFER];
+volatile uint16_t rx_isr_in_idx[2]  = {0, 0};   /*!< Written by ISR, read by main loop */
+volatile uint16_t rx_isr_out_idx[2] = {0, 0};   /*!< Written by main loop, read by ISR */
 
 /**
   * @brief  Transmit ISR buffers (circular)
   */
-static volatile uint16_t tx_isr_buffer[2][SIZE_TX_BUFFER];
-static volatile uint16_t tx_isr_in_idx[2] = {0, 0};
-static volatile uint16_t tx_isr_out_idx[2] = {0, 0};
+static volatile uint8_t tx_isr_buffer[2][SIZE_TX_BUFFER];
+volatile uint16_t tx_isr_in_idx[2]  = {0, 0};   /*!< Written by main loop, read by ISR */
+volatile uint16_t tx_isr_out_idx[2] = {0, 0};   /*!< Written by ISR, read by main loop */
 
 /**
   * @brief  SLIP decoding buffers
+  * @note   uint8_t: required for correct memcpy into BasePacket_t.
+  *         uint16_t caused arg1/arg2 corruption (zero bytes interleaved every 2nd byte).
   */
-static uint16_t rx_slip_buffer[2][SIZE_RX_BUFFER];
+static uint8_t rx_slip_buffer[2][SIZE_RX_BUFFER];
 static uint16_t rx_slip_idx[2] = {0, 0};
 
 /**
@@ -71,6 +77,13 @@ volatile uint32_t base_com_check_timer_10ms = 0;
   * @brief  RS485 direction control
   */
 static bool rs485_tx_active[2] = {false, false};
+
+/**
+  * @brief  Error statistics (accessible via extern in sci_coms.h for debugger watch)
+  */
+uint32_t SCI_RxOverflow[2]  = {0, 0};  /*!< RX ring buffer overflow (ISR dropped bytes) */
+uint32_t SCI_CrcErrors[2]   = {0, 0};  /*!< CRC mismatch on received packet */
+uint32_t SCI_SlipErrors[2]  = {0, 0};  /*!< SLIP decode error (overflow / bad escape / restart) */
 
 /* Private function prototypes -----------------------------------------------*/
 
@@ -165,9 +178,9 @@ static void SCI_WriteTxBuffer(SCI_Device_e dev, uint8_t c)
   tx_isr_buffer[dev][tx_isr_in_idx[dev]] = c;
   tx_isr_in_idx[dev] = (tx_isr_in_idx[dev] + 1) & TX_BUFFER_LEN_MASK;
 
-  /* Enable TX interrupt */
+  /* Enable TX FIFO threshold interrupt (both USART2 and USART3 use FIFO mode) */
   UART_HandleTypeDef *huart = SCI_GetUartHandle(dev);
-  __HAL_UART_ENABLE_IT(huart, UART_IT_TXE);
+  __HAL_UART_ENABLE_IT(huart, UART_IT_TXFT);
 }
 
 /* Exported functions --------------------------------------------------------*/
@@ -194,9 +207,9 @@ void SCI_Init(void)
 void SCI_Device_Init(SCI_Device_e dev)
 {
   /* Clear buffers */
-  memset((void*)&rx_isr_buffer[dev][0], 0, SIZE_RX_BUFFER * sizeof(uint16_t));
-  memset((void*)&tx_isr_buffer[dev][0], 0, SIZE_TX_BUFFER * sizeof(uint16_t));
-  memset(&rx_slip_buffer[dev][0], 0, SIZE_RX_BUFFER * sizeof(uint16_t));
+  memset((void*)&rx_isr_buffer[dev][0], 0, SIZE_RX_BUFFER);
+  memset((void*)&tx_isr_buffer[dev][0], 0, SIZE_TX_BUFFER);
+  memset(&rx_slip_buffer[dev][0], 0, SIZE_RX_BUFFER);
 
   /* Reset indices */
   rx_isr_in_idx[dev] = 0;
@@ -290,6 +303,7 @@ bool SCI_ReadPacket(SCI_Device_e dev, API_CMD_TYPE_e *prw, API_REG_e *preg,
       uint16_t calc_crc = CRC_Calculate((const uint8_t*)&packet,
                                         sizeof(BasePacket_t) - sizeof(uint16_t));
       if (calc_crc != packet.crc) {
+        SCI_CrcErrors[dev]++;
         return false;  /* CRC mismatch */
       }
 
@@ -369,6 +383,7 @@ bool SCI_SlipDecode(SCI_Device_e dev, uint8_t c, uint16_t *out_len)
 {
   /* Check for buffer overflow */
   if (rx_slip_idx[dev] >= SIZE_RX_BUFFER) {
+    SCI_SlipErrors[dev]++;
     slip_state[dev] = SRX_IDLE;
     rx_slip_idx[dev] = 0;
     return false;
@@ -394,6 +409,7 @@ bool SCI_SlipDecode(SCI_Device_e dev, uint8_t c, uint16_t *out_len)
         slip_state[dev] = SRX_CHAR;
       } else {
         /* Invalid escape sequence */
+        SCI_SlipErrors[dev]++;
         slip_state[dev] = SRX_IDLE;
       }
       break;
@@ -409,6 +425,7 @@ bool SCI_SlipDecode(SCI_Device_e dev, uint8_t c, uint16_t *out_len)
         slip_state[dev] = SRX_ESC;
       } else if (c == SLIP_START) {
         /* Unexpected START - restart */
+        SCI_SlipErrors[dev]++;
         slip_state[dev] = SRX_IDLE;
       } else {
         rx_slip_buffer[dev][rx_slip_idx[dev]++] = c;
@@ -483,6 +500,8 @@ void SCI_RxCallback(SCI_Device_e dev, uint8_t data)
   if (!SCI_IsRxBufferFull(dev)) {
     rx_isr_buffer[dev][rx_isr_in_idx[dev]] = data;
     rx_isr_in_idx[dev] = (rx_isr_in_idx[dev] + 1) & RX_BUFFER_LEN_MASK;
+  } else {
+    SCI_RxOverflow[dev]++;
   }
 }
 
@@ -493,17 +512,38 @@ void SCI_RxCallback(SCI_Device_e dev, uint8_t data)
   */
 void SCI_TxCallback(SCI_Device_e dev)
 {
-  if (!SCI_IsTxBufferEmpty(dev)) {
-    /* Send next character */
-    uint8_t c = (uint8_t)tx_isr_buffer[dev][tx_isr_out_idx[dev]];
-    tx_isr_out_idx[dev] = (tx_isr_out_idx[dev] + 1) & TX_BUFFER_LEN_MASK;
+  UART_HandleTypeDef *huart = SCI_GetUartHandle(dev);
 
-    UART_HandleTypeDef *huart = SCI_GetUartHandle(dev);
-    huart->Instance->TDR = c;
-  } else {
-    /* Buffer empty - disable TX interrupt */
-    UART_HandleTypeDef *huart = SCI_GetUartHandle(dev);
-    __HAL_UART_DISABLE_IT(huart, UART_IT_TXE);
+  /* Both USART2 and USART3 use FIFO mode: drain ring buffer while TXFNF */
+  while (!SCI_IsTxBufferEmpty(dev) &&
+         __HAL_UART_GET_FLAG(huart, UART_FLAG_TXE)) {
+    huart->Instance->TDR = (uint8_t)tx_isr_buffer[dev][tx_isr_out_idx[dev]];
+    tx_isr_out_idx[dev] = (tx_isr_out_idx[dev] + 1) & TX_BUFFER_LEN_MASK;
+  }
+  if (SCI_IsTxBufferEmpty(dev)) {
+    __HAL_UART_DISABLE_IT(huart, UART_IT_TXFT);
+  }
+}
+
+/**
+  * @brief  Printf-style formatted output to SCI device (debug)
+  * @param  dev: Device identifier (SCI_A_FD for debug)
+  * @param  fmt: printf format string
+  * @retval None
+  */
+void SCI_Printf(SCI_Device_e dev, const char *fmt, ...)
+{
+  char buf[256];
+  va_list args;
+  va_start(args, fmt);
+  int len = vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+
+  if (len <= 0) return;
+  if (len > (int)(sizeof(buf) - 1)) len = (int)(sizeof(buf) - 1);
+
+  for (int i = 0; i < len; i++) {
+    SCI_PutChar(dev, (uint8_t)buf[i]);
   }
 }
 

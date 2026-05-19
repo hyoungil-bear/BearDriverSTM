@@ -55,8 +55,7 @@ void Version_Print(void)
 {
   printf("\n");
   printf("========================================\n");
-  printf("  %s\n", PROJECT_NAME);
-  printf("  Platform: %s\n", PLATFORM_NAME);
+
   printf("========================================\n");
   printf("  Firmware Version: %d.%d.%d.%d\n",
          version.parts.major,

@@ -1,9 +1,11 @@
 /*
  * crc.h
  *
- * CRC-16 calculation for communication packets.
- * Adapted from TI BearDriver bear::compute_crc / bear::validate_crc
- * for STM32G474.
+ * XOR-based 16-bit CRC for communication packets.
+ * Matches TI BearDriver bear::xor_crc<uint16_t> exactly.
+ *
+ * Algorithm: XOR all 16-bit little-endian words of the payload.
+ *   init = 0, no polynomial, no reflection, no final XOR.
  */
 
 #ifndef CRC_H_
@@ -17,24 +19,24 @@ extern "C" {
 #include <stdbool.h>
 
 /**
-  * @brief  Calculate CRC-16 over a data buffer
+  * @brief  Calculate XOR-16 checksum over a data buffer
+  * @note   Matches TI BearDriver bear::xor_crc<uint16_t>(data, len):
+  *           crc = word[0] ^ word[1] ^ ... ^ word[n-1]  (16-bit little-endian words)
   * @param  data: Pointer to data buffer
   * @param  len: Length of data in bytes
-  * @retval CRC-16 value
+  * @retval XOR-16 checksum
   */
 static inline uint16_t CRC_Calculate(const uint8_t *data, uint16_t len)
 {
-  uint16_t crc = 0xFFFF;
+  uint16_t crc = 0;
 
-  for (uint16_t i = 0; i < len; i++) {
-    crc ^= (uint16_t)data[i] << 8;
-    for (uint8_t j = 0; j < 8; j++) {
-      if (crc & 0x8000) {
-        crc = (crc << 1) ^ 0x1021;  /* CRC-16-CCITT polynomial */
-      } else {
-        crc <<= 1;
-      }
-    }
+  /* XOR all 16-bit little-endian words */
+  for (uint16_t i = 0; i + 1U < len; i += 2U) {
+    crc ^= (uint16_t)data[i] | ((uint16_t)data[i + 1U] << 8);
+  }
+  /* Trailing odd byte (if len is odd) */
+  if (len & 1U) {
+    crc ^= (uint16_t)data[len - 1U];
   }
 
   return crc;

@@ -112,9 +112,12 @@ void MX_USART2_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART2_Init 2 */
-  /* Override CubeMX baud rate with SCIA_BAUD_RATE define (sci_coms.h) */
+  /* Safety net: re-apply SCIA_BAUD_RATE in case CubeMX regeneration changes it */
   huart2.Init.BaudRate = SCIA_BAUD_RATE;
   if (HAL_UART_Init(&huart2) != HAL_OK) { Error_Handler(); }
+  /* Enable TX FIFO: threshold = 1/2 (4 bytes) — reduces ISR rate ~4x vs byte-by-byte */
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart2, UART_TXFIFO_THRESHOLD_1_2) != HAL_OK) { Error_Handler(); }
+  if (HAL_UARTEx_EnableFifoMode(&huart2) != HAL_OK) { Error_Handler(); }
   /* USER CODE END USART2_Init 2 */
 
 }
@@ -158,12 +161,15 @@ void MX_USART3_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART3_Init 2 */
-  /* Safety net: re-apply SCIB_BAUD_RATE and RS485 DE in case CubeMX regeneration changes them */
+  /* Safety net: re-apply SCIB_BAUD_RATE, RS485 DE timing, and FIFO in case CubeMX regeneration changes them */
   huart3.Init.BaudRate = SCIB_BAUD_RATE;
-  if (HAL_RS485Ex_Init(&huart3, UART_DE_POLARITY_HIGH, 0, 0) != HAL_OK)
+  if (HAL_RS485Ex_Init(&huart3, UART_DE_POLARITY_HIGH, 4, 4) != HAL_OK)
   {
     Error_Handler();
   }
+  /* FIFO: TX threshold 1/2 (4 bytes). Must be set AFTER HAL_RS485Ex_Init. */
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart3, UART_TXFIFO_THRESHOLD_1_2) != HAL_OK) { Error_Handler(); }
+  if (HAL_UARTEx_EnableFifoMode(&huart3) != HAL_OK) { Error_Handler(); }
   /* USER CODE END USART3_Init 2 */
 
 }
@@ -281,7 +287,12 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   /* USER CODE BEGIN USART3_MspInit 1 */
-
+  /* Pull-up on RX pin only: prevents spurious RXNE from floating RS485 bus.
+   * TX and DE are outputs in AF mode — pull setting has no effect on them.
+   * Re-init uart3_485_RX_Pin separately to override the GPIO_NOPULL above. */
+  GPIO_InitStruct.Pin = uart3_485_RX_Pin;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
   /* USER CODE END USART3_MspInit 1 */
   }
 }

@@ -22,6 +22,7 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include "api.h"
 
 /** @addtogroup BearDriver
@@ -61,11 +62,11 @@ typedef enum
 
 /* Buffer sizes (must be power of 2) */
 #define SIZE_RX_BUFFER      128U      /*!< Receive buffer size */
-#define SIZE_TX_BUFFER      128U      /*!< Transmit buffer size */
+#define SIZE_TX_BUFFER      512U      /*!< Transmit buffer size (increased from 128 to prevent overflow) */
 
 /* Buffer masks */
 #define RX_BUFFER_LEN_MASK  0x7FU     /*!< RX buffer index mask */
-#define TX_BUFFER_LEN_MASK  0x7FU     /*!< TX buffer index mask */
+#define TX_BUFFER_LEN_MASK  0x1FFU    /*!< TX buffer index mask (512-1) */
 
 /* SLIP protocol characters */
 #define SLIP_END            0xC0U     /*!< End of packet */
@@ -87,6 +88,21 @@ typedef enum
   * @brief  Base communication check timer (10ms ticks)
   */
 extern volatile uint32_t base_com_check_timer_10ms;
+
+/**
+  * @brief  RX/TX buffer indices (volatile, written by ISR; read by main loop)
+  */
+extern volatile uint16_t rx_isr_in_idx[2];
+extern volatile uint16_t rx_isr_out_idx[2];
+extern volatile uint16_t tx_isr_in_idx[2];
+extern volatile uint16_t tx_isr_out_idx[2];
+
+/**
+  * @brief  Error counters (watchable in debugger)
+  */
+extern uint32_t SCI_RxOverflow[2];   /*!< RX ring buffer overflow (ISR dropped bytes) */
+extern uint32_t SCI_CrcErrors[2];    /*!< CRC mismatch on received packet */
+extern uint32_t SCI_SlipErrors[2];   /*!< SLIP decode error (overflow / bad escape / restart) */
 
 /* Exported functions prototypes ---------------------------------------------*/
 
@@ -191,6 +207,14 @@ void SCI_RxCallback(SCI_Device_e dev, uint8_t data);
   * @retval None
   */
 void SCI_TxCallback(SCI_Device_e dev);
+
+/**
+  * @brief  Printf-style formatted output to SCI device (debug)
+  * @param  dev: Device identifier (SCI_A_FD for debug)
+  * @param  fmt: printf format string
+  * @retval None
+  */
+void SCI_Printf(SCI_Device_e dev, const char *fmt, ...);
 
 /**
   * @}

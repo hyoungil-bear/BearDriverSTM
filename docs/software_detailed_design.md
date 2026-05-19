@@ -31,6 +31,7 @@
    - 4.13 [CRC 모듈 (crc)](#413-crc-모듈-crc)
    - 4.14 [버전 관리 모듈 (version)](#414-버전-관리-모듈-version)
    - 4.15 [디버그 모듈 (debug)](#415-디버그-모듈-debug)
+   - 4.16 [ISR 실행 시간 측정 모듈 (cpu_time)](#416-isr-실행-시간-측정-모듈-cpu_time)
 5. [데이터 구조 및 자료형](#5-데이터-구조-및-자료형)
 6. [인터럽트 설계](#6-인터럽트-설계)
 7. [실행 컨텍스트 및 타이밍](#7-실행-컨텍스트-및-타이밍)
@@ -158,7 +159,7 @@ BearDriverSTM은 서비스 로봇 구동용 듀얼 BLDC/PMSM 모터 제어 펌�
 ├─────────────────────────────────────────────────────────────────┤
 │                    통신 계층 (Communication Layer)                  │
 │  sci_coms    : UART/RS485 드라이버 + SLIP 프로토콜 인코더/디코더     │
-│  crc         : CRC-16-CCITT 검증                                   │
+│  crc         : XOR-16 체크섬 검증 (TI bear::xor_crc 호환)          │
 │  spi_flash   : SPI FRAM 파라미터 저장 (FM25V02A)                    │
 ├─────────────────────────────────────────────────────────────────┤
 │                    유틸리티 계층 (Utility Layer)                    │
@@ -465,6 +466,7 @@ BearDriver_MainLoop() [~4.5kHz]
 ```
 BearDriver_Main()
   ├→ DWT 사이클 카운터 활성화
+  ├→ CPU_TIME_init(&cpu_time_m1/m2, SystemCoreClock, PWM_FREQUENCY)
   ├→ ADC 캘리브레이션 (hadc1~hadc5)
   ├→ HAL_Delay(1000ms)
   ├→ HW 버전 읽기: PB4/PB5/PB7/PE1 → motor_hd_version (4-bit)
@@ -697,6 +699,69 @@ typedef enum {
 
 > USART1 (PA9/PA10, 115200) 은 Base 통신용 예약. SCI 모듈 미통합.
 
+#### 4.8.1 버퍼 설계
+
+| 버퍼 | 크기 | 마스크 | 설명 |
+|------|------|--------|------|
+| RX 원형 버퍼 | 128 바이트 | 0x7F | ISR → 메인 루프 |
+| TX 원형 버퍼 | **512 바이트** | **0x1FF** | 메인 루프 → ISR (USART2 FIFO 충분 확보) |
+| SLIP 디코딩 버퍼 | 128 바이트 | - | SLIP 디코딩된 패킷 임시 저장 |
+
+#### 4.8.2 TX FIFO 모드 (USART2 + USART3)
+
+USART2(SCI_A_FD) 및 USART3(SCI_B_FD) 모두 TX FIFO 8단계 활성화, threshold = 1/2(4바이트). TXFT 인터럽트로 ISR 횟수 ~4배 감소. `SCI_WriteTxBuffer`, `SCI_TxCallback` 분기 없이 단일 경로.
+
+```
+SCI_WriteTxBuffer(c)
+  └→ UART_IT_TXFT 활성화  // USART2 + USART3 공통 (양쪽 FIFO 모드)
+
+TX 인터럽트 (TXFT)
+  └→ SCI_TxCallback(dev)
+      └→ while(TXFNF) TDR = buf[out++]  // FIFO 최대 8바이트 드레인
+           └→ [버퍼 비어있음] TXFT 인터럽트 비활성화
+```
+
+> usart.c USER CODE 2: 양쪽 USART 모두 `HAL_UARTEx_SetTxFifoThreshold(1/2)` + `HAL_UARTEx_EnableFifoMode()`.
+> stm32g4xx_it.c: USART2/USART3 모두 `UART_FLAG_TXFT` / `UART_IT_TXFT` 체크.
+
+#### 4.8.3 RX 드레인 루프
+
+단일 바이트 RXNE 읽기 대신 FIFO 내 모든 바이트를 ISR 1회 진입에서 소비:
+
+```c
+if (__HAL_UART_GET_IT_SOURCE(huart, UART_IT_RXNE)) {
+  while (__HAL_UART_GET_FLAG(huart, UART_FLAG_RXNE)) {
+    uint8_t data = (uint8_t)(huart->Instance->RDR & 0xFFU);
+    SCI_RxCallback(dev, data);
+  }
+}
+```
+
+ISR 오버런 방지 + RX 원형버퍼 풀 시 `SCI_RxOverflow[dev]++` 계수.
+
+#### 4.8.4 에러 카운터
+
+디버거 Watch 변수 (extern in sci_coms.h):
+
+| 변수 | 설명 |
+|------|------|
+| `SCI_RxOverflow[2]` | ISR에서 RX 원형버퍼 풀로 바이트 드롭된 횟수 |
+| `SCI_CrcErrors[2]` | 수신 패킷 CRC 불일치 횟수 |
+| `SCI_SlipErrors[2]` | SLIP 디코딩 오류 횟수 (버퍼 오버플로, 잘못된 ESC, 비정상 START) |
+
+#### 4.8.5 인터페이스
+
+| 함수 | 설명 |
+|------|------|
+| `SCI_Init()` | 전체 SCI 시스템 초기화 |
+| `SCI_Device_Init(dev)` | 특정 UART 디바이스 초기화 (버퍼 바이트 단위 클리어) |
+| `SCI_ReadPacket(dev, ...)` | 패킷 수신 (SLIP 디코딩 + XOR-16 CRC 검증) |
+| `SCI_SendPacket(dev, packet)` | 패킷 송신 (SLIP 인코딩, TX overflow 보호) |
+| `SCI_TxEmpty(dev)` | TX 완료 확인 (SW 버퍼 + UART_FLAG_TC) |
+| `SCI_RxCallback(dev, data)` | RX ISR 콜백 (버퍼 풀 시 SCI_RxOverflow 계수) |
+| `SCI_TxCallback(dev)` | TX ISR 콜백 (FIFO 드레인, 양쪽 USART 동일 경로) |
+| `SCI_Printf(dev, fmt, ...)` | printf 형식 디버그 출력 (SCI_A_FD 권장) |
+
 ---
 
 ### 4.9 API 모듈 (api)
@@ -745,15 +810,37 @@ SysTick 10ms 콜백 기반 다중 소프트웨어 타이머. 통신 타임아웃
 
 **파일**: `BearDriver/Inc/crc.h`
 
-CRC-16-CCITT (0x1021, init=0xFFFF). SLIP 패킷 무결성 검증.
+XOR-16 체크섬 (init=0, 다항식/리플렉션/최종 XOR 없음). SLIP 패킷 무결성 검증.
 
-> TI 대비: 알고리즘 동일. TI CRC HW 모듈 미사용, SW 테이블 방식 유지.
+```c
+// XOR all 16-bit little-endian words of the payload
+crc = word[0] ^ word[1] ^ ... ^ word[n-1]
+```
+
+> TI 대비: TI `bear::xor_crc<uint16_t>` 와 알고리즘 완전 동일.
+> 이전 CRC-16-CCITT (0x1021, init=0xFFFF) 에서 변경 — TI 호환성 복원.
 
 ### 4.14 버전 관리 모듈 (version)
 
 **파일**: `BearDriver/Inc/version.h`, `BearDriver/Inc/version_info.h`, `BearDriver/Src/version_info.cpp`
 
-VERSION_STRING="7.0.0.0", PLATFORM_NAME="STM32G474", PROJECT_NAME="BearDriver_STM32_EV".
+TI 원본 스타일 적용: Doxygen 없음, VERSION_STRING/PLATFORM_NAME/PROJECT_NAME 제거.
+
+```c
+// version.h (TI 스타일)
+#define MAJOR_VERSION  6
+#define MINOR_VERSION  0
+#define REVISION       0
+#define BUILD          0
+```
+
+버전 응답 (`getVersion`): `VERSION_INFO_t` 유니온 사용, TI와 동일한 packing.
+```c
+pOut->arg1 = v->groups.major_minor;     // little-endian: lower 16bit = MAJOR = 6
+pOut->arg2 = v->groups.revision_build;
+```
+
+> TI 대비: TI 원본 `version.h` 스타일 복원. 이전 VERSION_STRING/PLATFORM_NAME/PROJECT_NAME 매크로 제거.
 
 ### 4.15 디버그 모듈 (debug)
 
@@ -762,6 +849,84 @@ VERSION_STRING="7.0.0.0", PLATFORM_NAME="STM32G474", PROJECT_NAME="BearDriver_ST
 DAC 출력 기반 실시간 신호 관측. DAC1_CH2(PA5), DAC2_CH1(PA6).
 
 > TI 대비: TI에 없는 STM32 추가 기능 (HW DAC 활용).
+
+### 4.16 ISR 실행 시간 측정 모듈 (cpu_time)
+
+**파일**: `BearDriver/Inc/cpu_time.h` (헤더 전용, inline 구현)
+
+#### 4.16.1 모듈 개요
+
+ARM Cortex-M4 DWT(Data Watchpoint and Trace) 사이클 카운터를 이용한 ISR 실행 시간 측정 모듈. TI MotorWare `cpu_time.h/cpu_time.c` (CPU Timer 2 기반)를 대체한다.
+
+> TI 대비: TI CPU Timer 2 (free-running 32-bit counter) → ARM DWT->CYCCNT (32-bit cycle counter). 별도 하드웨어 타이머 소비 없이 동일 기능 제공.
+
+#### 4.16.2 데이터 구조
+
+```c
+typedef struct {
+  uint32_t start_cnt;       // DWT->CYCCNT at ISR entry
+  uint32_t isr_cycles;      // Last ISR execution cycles
+  uint32_t isr_cycles_max;  // Peak ISR execution cycles (worst case)
+  uint32_t pwm_period_cyc;  // PWM period in CPU cycles (= SYSCLK / PWM_Hz)
+  float    cpu_usage;       // CPU usage ratio (0.0 ~ 1.0), updated per ISR
+  float    cpu_usage_max;   // Peak CPU usage ratio (0.0 ~ 1.0)
+} CPU_TIME_Obj;
+```
+
+#### 4.16.3 인터페이스
+
+| 함수 | 호출 위치 | 설명 |
+|------|----------|------|
+| `CPU_TIME_init(obj, sysclk_hz, pwm_freq_hz)` | `BearDriver_Main()` 초기화부 | 구조체 초기화, `pwm_period_cyc = sysclk_hz / pwm_freq_hz` |
+| `CPU_TIME_start(obj)` | `MotorX_ADC_ReadAndISR()` 진입 | `DWT->CYCCNT` 스냅샷 저장 |
+| `CPU_TIME_end(obj)` | `MotorX_ADC_ReadAndISR()` 종료 | elapsed 계산, peak 갱신, `cpu_usage` 산출 |
+| `CPU_TIME_getUsage(obj)` | 디버거/API | 현재 ISR CPU 사용률 반환 |
+| `CPU_TIME_getUsageMax(obj)` | 디버거/API | 피크 ISR CPU 사용률 반환 |
+| `CPU_TIME_resetMax(obj)` | 디버거/API | 피크값 리셋 |
+
+#### 4.16.4 인스턴스
+
+```c
+CPU_TIME_Obj cpu_time_m1;   // Motor1 ISR 측정 (ADC3 콜백)
+CPU_TIME_Obj cpu_time_m2;   // Motor2 ISR 측정 (ADC1 콜백)
+```
+
+#### 4.16.5 측정 구간
+
+```
+Motor1_ADC_ReadAndISR() {
+  CPU_TIME_start(&cpu_time_m1);    ← DWT->CYCCNT 스냅샷
+  // ADC 읽기 → 전류 변환 → FOC → PWM 출력
+  Motor1_ISR_Handler();
+  CPU_TIME_end(&cpu_time_m1);      ← elapsed = CYCCNT - start, cpu_usage 갱신
+}
+```
+
+Motor2도 동일 패턴 (`cpu_time_m2`).
+
+#### 4.16.6 CPU 사용률 계산
+
+```
+cpu_usage = isr_cycles / pwm_period_cyc
+          = isr_cycles / (170,000,000 / 10,000)
+          = isr_cycles / 17,000
+```
+
+| 구간 | cpu_usage | 판정 |
+|------|-----------|------|
+| < 0.50 | 안전 | 충분한 여유 |
+| 0.50 ~ 0.70 | 정상 | 운용 가능 |
+| 0.70 ~ 0.80 | 주의 | 최적화 검토 |
+| > 0.80 | 위험 | ISR 오버런 위험 |
+
+#### 4.16.7 측정 오버헤드
+
+| 항목 | 사이클 |
+|------|--------|
+| `CPU_TIME_start` | ~3 |
+| `CPU_TIME_end` (정수 연산) | ~6 |
+| `CPU_TIME_end` (float 변환+VDIV.F32) | ~18 |
+| **합계** | **~27 (~0.16%)** |
 
 ---
 
@@ -801,8 +966,8 @@ DAC 출력 기반 실시간 신호 관측. DAC1_CH2(PA5), DAC2_CH1(PA6).
 | **2** | ADC3 | ADC3_IRQHandler | TIM20 동기 | → Motor1_ADC_ReadAndISR |
 | **3** | TIM5 | TIM5_IRQHandler | 비주기 | Motor1 인코더 overflow |
 | **3** | TIM2 | TIM2_IRQHandler | 비주기 | Motor2 인코더 overflow |
-| **3** | USART2 | USART2_IRQHandler | 바이트 | SCI RX/TX (HAL 우회) |
-| **3** | USART3 | USART3_IRQHandler | 바이트 | SCI RS485 RX/TX |
+| **3** | USART2 | USART2_IRQHandler | RX: 드레인루프, TX: FIFO(TXFT) | SCI RX/TX (HAL 우회, TX FIFO 8단계) |
+| **3** | USART3 | USART3_IRQHandler | RX: 드레인루프, TX: FIFO(TXFT) | SCI RS485 RX/TX (TX FIFO 8단계) |
 | **4** | TIM1_BRK_TIM15 | TIM1_BRK_TIM15_IRQHandler | 이벤트 | Motor1 gate driver fault |
 | **4** | TIM20_BRK | TIM20_BRK_IRQHandler | 이벤트 | Motor2 gate driver fault |
 | **15** | SysTick | SysTick_Handler | 1kHz | HAL tick + SlowADC + 10ms timer |
@@ -897,15 +1062,16 @@ PWM (10kHz) ─→ [÷1] ─→ ADC trigger ─→ ISR (10kHz per motor)
 | 0xDB 0xDD | 데이터 내 0xDB 인코딩 |
 
 수신 상태머신: `SRX_IDLE → SRX_CHAR → SRX_ESC`
-버퍼: `rx_isr_buffer[2][128]` (ISR circular), `rx_slip_buffer[2][128]` (SLIP decode linear)
+버퍼: `rx_isr_buffer[2][128]` (RX ISR circular), `tx_isr_buffer[2][512]` (TX ISR circular), `rx_slip_buffer[2][128]` (SLIP decode linear)
 
 ### 8.3 RS485 통신
 
 - 트랜시버: MAX3485EESA+
 - DE 제어: PB14 = USART3_DE (AF7, 하드웨어 자동 제어)
-- DEAT/DEDT = 0 (switching time 120ns << bit period 8.68μs @ 115200)
+- DEAT/DEDT = 4 (~1μs DE 어설션/디어설션 여유, bit period 8.68μs @ 115200)
 - TX 중 RX 억제: `!rs485_tx_active` guard in `SCI_ProcessHostComs()`
 - TX 완료 확인: `SCI_TxEmpty()` → UART_FLAG_TC (shift register drain)
+- PD9(RX) GPIO_PULLUP: 버스 부동 시 spurious RXNE 방지
 
 > TI 대비: TI SCI GPIO DE 제어 → STM32 USART HW DE 자동 제어. 프로토콜 동일.
 
@@ -947,6 +1113,7 @@ PWM (10kHz) ─→ [÷1] ─→ ADC trigger ─→ ISR (10kHz per motor)
 ```
 STATE_FAULT_RESTART
   ├→ SetErrorCode(kErrorNone) × 2       ← 에러 플래그 전체 클리어
+  ├→ fault_latch_m1 = 0, fault_latch_m2 = 0  ← ISR fault latch 클리어
   ├→ Flag_bypassFaultCheck = true × 2   ← ISR fault 폴링 우회 (TI PIE_disableExtInt 대체)
   ├→ gateDriver.reset() × 2             ← SD 펄스 + fault latch 클리어 (3ms blocking)
   └→ FALLTHROUGH ↓
@@ -977,6 +1144,44 @@ setupMotor 인자:
 motor1.setupMotor(&gUserParams, &htim1, &hadc3, &hadc4);
 motor2.setupMotor(&gUserParams, &htim20, &hadc1, &hadc2);
 ```
+
+### 9.5 워치독 (IWDG)
+
+**설정값**
+
+| 항목 | 값 | 비고 |
+|------|-----|------|
+| 클럭 | LSI 32 kHz | 독립 클럭 — 시스템 클럭 장애와 무관 |
+| Prescaler | `/4` (`IWDG_PRESCALER_4`) | tick = 8 kHz (0.125 ms) |
+| Reload | 4095 | 12-bit 최대값 |
+| **Ti (Timeout)** | **512 ms** | (4095+1) × 0.125 ms |
+| Window | 4095 | Window 모드 비활성 |
+| 리셋 방식 | RESET only | 인터럽트 미사용 |
+
+**지연 시작 패턴 (TI `HAL_setupWatchdog()` 동일)**
+
+`main.c` 주변장치 초기화 블록에서 `MX_IWDG_Init()`이 호출되지만, `iwdg.c`의 `USER CODE BEGIN IWDG_Init 0`에서 첫 번째 호출을 early return으로 차단한다. 이를 통해 `HAL_Delay(1000)` 및 플래시 초기화 구간을 워치독 비활성 상태로 안전하게 통과한다.
+
+```
+1st call  (main.c peripheral init)        → s_iwdg_deferred=true  → 파라미터 저장 후 return
+2nd call  (BearDriver_Main, for(;;) 직전) → HAL_IWDG_Init() 실행  → IWDG 시작
+```
+
+**리프레시 구조**
+
+```cpp
+MX_IWDG_Init();          // IWDG 시작 (초기화 완료 후)
+for (;;) {
+    HAL_IWDG_Refresh(&hiwdg);           // 외부 루프 kick
+    while (gFlag_enableSystem) {
+        HAL_IWDG_Refresh(&hiwdg);       // 내부 루프 kick (~4.5 kHz)
+        Timers_Process();
+        main_loop();
+    }
+}
+```
+
+> TI 대비: `WDOG_clearCounter(halHandle->wdogHandle)` → `HAL_IWDG_Refresh(&hiwdg)`. 호출 위치·구조 동일. Ti TI ~418 ms → STM32 512 ms.
 
 ---
 
@@ -1084,7 +1289,7 @@ BearDriverSTM/
 │   │                 spi_flash.h, flash_layout.h, crc.h, timers.h,
 │   │                 version.h, version_info.h, user_params.h,
 │   │                 user_motor_database.h, differential_drive_limiter_helper.h,
-│   │                 debug.h
+│   │                 debug.h, cpu_time.h
 │   └── Src/          bear_driver.cpp, bldc_motor.cpp, api.cpp, pid.cpp,
 │                     encoder.cpp, hall_sensor.cpp, traj.cpp, EStop_SCurve.c,
 │                     sci_coms.cpp, spi_flash.cpp, timers.cpp,
@@ -1129,7 +1334,39 @@ void BearDriver_SlowADC_Update(void);
 
 ## 부록 A: TI → STM32 포팅 변경 이력
 
+### A.1 초기 포팅 (BearDriverSTM_EV 기반)
+
 §1.3 TI C2000 대비 변경 사항 참조.
+
+### A.2 TI 호환성 복원 및 UART 개선 (2026-05-18)
+
+| 구분 | 파일 | 변경 내용 |
+|------|------|-----------|
+| **CRC** | `crc.h` | CRC-16-CCITT → XOR-16 (TI `bear::xor_crc<uint16_t>` 완전 일치) |
+| **버전** | `version.h` | TI 원본 스타일 복원: VERSION_STRING/PLATFORM_NAME/PROJECT_NAME 제거, MAJOR=6 |
+| **버전** | `version.cpp` | Version_Print()에서 PROJECT_NAME/PLATFORM_NAME 출력 제거 |
+| **버전** | `api.cpp` | getVersion: `VERSION_INFO_t` 유니온 사용 → TI와 동일한 major_minor packing |
+| **버퍼 타입** | `sci_coms.cpp` | rx/tx_isr_buffer, rx_slip_buffer: `uint16_t` → `uint8_t` (zero-byte interleaving 버그 수정) |
+| **USART3 FIFO** | `usart.c` | USART3 TX FIFO 활성화: threshold=1/2, EnableFifoMode (기존 Disabled) |
+| **RS485 DE 타이밍** | `usart.c` | DEAT/DEDT: `(0,0)` → `(4,4)` (~1μs 여유 마진) |
+| **RX pull-up** | `usart.c` | PD9(USART3 RX) GPIO_PULLUP 추가: 버스 부동 spurious RXNE 방지 |
+| **TX 인터럽트 통합** | `sci_coms.cpp` | `SCI_WriteTxBuffer`: SCI_A_FD/SCI_B_FD 분기 제거 → UART_IT_TXFT 단일 경로 |
+| **TX 콜백 통합** | `sci_coms.cpp` | `SCI_TxCallback`: if/else 분기 제거 → FIFO 드레인 단일 경로 (양쪽 USART) |
+| **RX 드레인 루프** | `stm32g4xx_it.c` | USART2/3 RXNE: 단일 바이트 → while(RXNE) 드레인 루프 |
+| **USART3 TX 인터럽트** | `stm32g4xx_it.c` | UART_IT_TXE → UART_IT_TXFT (FIFO 모드 일치) |
+| **에러 카운터** | `sci_coms.cpp/h` | `SCI_RxOverflow`, `SCI_CrcErrors`, `SCI_SlipErrors` [2] 추가 |
+| **memset 크기** | `sci_coms.cpp` | `SCI_Device_Init`: `SIZE * sizeof(uint16_t)` → `SIZE` (바이트 단위) |
+
+### A.3 ISR 실행 시간 측정 및 Fault Latch 수정 (2026-05-19)
+
+| 구분 | 파일 | 변경 내용 |
+|------|------|-----------|
+| **CPU_TIME 모듈** | `cpu_time.h` (신규) | DWT->CYCCNT 기반 ISR 실행 시간 측정 모듈 추가 (TI cpu_time.h/c 대체) |
+| **ISR 측정 적용** | `bear_driver.cpp` | `Motor1_ADC_ReadAndISR()` / `Motor2_ADC_ReadAndISR()` 에 `CPU_TIME_start/end` 삽입 |
+| **CPU 사용률** | `cpu_time.h` | `cpu_usage` (float, 0.0~1.0) 및 `cpu_usage_max` 필드 추가, ISR 매 사이클 자동 계산 |
+| **초기화** | `bear_driver.cpp` | `BearDriver_Main()` 에서 `CPU_TIME_init(&cpu_time_m1/m2, SystemCoreClock, PWM_FREQUENCY)` 호출 |
+| **Fault latch 클리어** | `bear_driver.cpp` | `STATE_FAULT_RESTART` 에서 `fault_latch_m1 = 0; fault_latch_m2 = 0;` 추가 (리스타트 후 잔류값 버그 수정) |
+| **Fault latch 선언** | `bear_driver.cpp` | `volatile uint32_t fault_latch_m1, fault_latch_m2` 변수 선언 추가 (기존 미선언) |
 
 ---
 

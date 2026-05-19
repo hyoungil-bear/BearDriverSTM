@@ -28,6 +28,7 @@
 
 #include "sci_coms.h"
 #include "timers.h"
+#include "iwdg.h"
 
 #include "hall_sensor.h"
 #include "bldc_motor.h"
@@ -38,6 +39,7 @@
 #include "user_params.h"
 #include "api.h"
 #include "differential_drive_limiter_helper.h"
+#include "cpu_time.h"
 
 #ifdef DEBUG
 #define DPRINTF(x, ...) printf(x, ##__VA_ARGS__)
@@ -86,6 +88,15 @@ MAIN_STATE main_state = STATE_INIT;
 bool ran_init_sequence = false;
 
 bool stall_lock_enable = false;
+
+// Sticky fault latch: captures error_code at the moment of STATE_FAULT entry
+// (error_code may be cleared by ISR before debugger reads it)
+volatile uint32_t fault_latch_m1 = 0;
+volatile uint32_t fault_latch_m2 = 0;
+
+// ISR execution time measurement (replaces TI CPU_TIME module)
+CPU_TIME_Obj cpu_time_m1;
+CPU_TIME_Obj cpu_time_m2;
 
 // motor version check
 int16_t motor_hd_version;
@@ -141,6 +152,10 @@ void BearDriver_Main(void) {
   DWT->CYCCNT = 0;
   DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
+  // Initialize ISR execution time measurement (replaces TI CPU_TIME module)
+  CPU_TIME_init(&cpu_time_m1, SystemCoreClock, PWM_FREQUENCY);
+  CPU_TIME_init(&cpu_time_m2, SystemCoreClock, PWM_FREQUENCY);
+
   // ADC Calibration
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
   HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);
@@ -173,8 +188,8 @@ void BearDriver_Main(void) {
   SCI_Init();
 
   DPRINTF("\r\n\r\n\r\nBLDC Controller Initializing\n");
-  DPRINTF("Version: %s  Platform: %s  HW: %d\n",
-          VERSION_STRING, PLATFORM_NAME, motor_hd_version);
+  DPRINTF("Version: %d.%d.%d.%d  HW: %d\n",
+          MAJOR_VERSION, MINOR_VERSION, REVISION, BUILD, motor_hd_version);
 
   // Initialize SPI FRAM (hardware NSS on PA15, no GPIO CS needed)
   spi_flash.init(&hspi3, nullptr, 0);
@@ -321,13 +336,18 @@ void BearDriver_Main(void) {
   DPRINTF("BLDC Controller Ready\n");
   DFLUSH();
 
+  // Start IWDG now — matches TI HAL_setupWatchdog() pattern:
+  // all initialization is complete; IWDG enabled just before the main loop.
+  // Ti = 512 ms (PRESCALER_4, Reload=4095, LSI=32kHz)
+  MX_IWDG_Init();
+
   // Begin the background loop
   for (;;) {
-    // TODO: HAL_IWDG_Refresh(&hiwdg); when IWDG is configured
+    HAL_IWDG_Refresh(&hiwdg);
 
     // loop while the enable system flag is true
     while (gFlag_enableSystem) {
-      // TODO: HAL_IWDG_Refresh(&hiwdg);
+      HAL_IWDG_Refresh(&hiwdg);
       IdleLoopCount++;
       Timers_Process();
       main_loop();
@@ -565,6 +585,8 @@ static void main_loop(void) {
       break;
 
     case STATE_FAULT_RESTART:
+      fault_latch_m1 = 0;
+      fault_latch_m2 = 0;
       motor1.SetErrorCode(Motor::kErrorNone);
       motor2.SetErrorCode(Motor::kErrorNone);
       // Bypass ISR fault check during gate driver reset and offset calibration.
@@ -683,16 +705,9 @@ static float adcToFloat(uint32_t raw) {
 }
 
 // **************************************************************************
-// Input-capture callbacks for low-speed encoder period measurement.
+// Encoder capture overflow callback (UIE).
+// CC interrupt is disabled; CCR1 latch is read by updateValues() each cycle.
 // Motor 1: TIM3 CH2 (PA4), Motor 2: TIM4 CH1 (PB6)
-
-extern "C" void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-  if (htim == motor1.encoder.getCaptureTimHandle()) {
-    motor1.encoder.handleCapture();
-  } else if (htim == motor2.encoder.getCaptureTimHandle()) {
-    motor2.encoder.handleCapture();
-  }
-}
 
 extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   if (htim == motor1.encoder.getCaptureTimHandle()) {
@@ -703,6 +718,8 @@ extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 }
 
 extern "C" void Motor1_ADC_ReadAndISR(void) {
+  CPU_TIME_start(&cpu_time_m1);
+
   // Motor 1: 2-shunt configuration
   //   ADC3 Injected Rank1 = CH4 (PE7) = Phase A
   //   ADC4 Injected Rank1 = CH1 (PE14) = Phase B
@@ -725,9 +742,13 @@ extern "C" void Motor1_ADC_ReadAndISR(void) {
       HAL_ADCEx_InjectedGetValue(&hadc3, ADC_INJECTED_RANK_2);
 
   Motor1_ISR_Handler();
+
+  CPU_TIME_end(&cpu_time_m1);
 }
 
 extern "C" void Motor2_ADC_ReadAndISR(void) {
+  CPU_TIME_start(&cpu_time_m2);
+
   // Motor 2: 2-shunt configuration
   //   ADC1 Injected Rank1 = CH6 (PC0) = Phase A
   //   ADC1 Injected Rank2 = CH7 (PC1) = Phase B
@@ -749,6 +770,8 @@ extern "C" void Motor2_ADC_ReadAndISR(void) {
       HAL_ADCEx_InjectedGetValue(&hadc2, ADC_INJECTED_RANK_1);
 
   Motor2_ISR_Handler();
+
+  CPU_TIME_end(&cpu_time_m2);
 }
 
 // ADC Injected conversion complete callback (dispatches to Motor1 or Motor2)

@@ -27,6 +27,7 @@
 #include "pid.h"
 #include "spi_flash.h"
 #include "version.h"
+#include "version_info.h"
 #include "user_params.h"
 #include "bear_driver.h"
 #include "differential_drive_limiter_helper.h"
@@ -261,8 +262,9 @@ static void setStallLockEnable(const BasePacket_t *pIn) {
 // the get functions
 
 static void getVersion(MotorPacket_t *pOut) {
-  pOut->arg1 = ((uint32_t)MAJOR_VERSION << 16) | (uint32_t)MINOR_VERSION;
-  pOut->arg2 = ((uint32_t)REVISION << 16) | (uint32_t)BUILD;
+  VERSION_INFO_t *v = Version_GetInfo();
+  pOut->arg1 = v->groups.major_minor;
+  pOut->arg2 = v->groups.revision_build;
 }
 
 static void getTrajK(MotorPacket_t *pOut) {

@@ -7,4 +7,5 @@ Release/
 
 # Eclipse/STM32CubeIDE
 .metadata/
+.settings/
 RemoteSystemsTempFiles/
