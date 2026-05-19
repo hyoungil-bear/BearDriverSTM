@@ -1,0 +1,10 @@
+# Build output
+Debug/
+Release/
+
+# Backup files
+*.bak
+
+# Eclipse/STM32CubeIDE
+.metadata/
+RemoteSystemsTempFiles/

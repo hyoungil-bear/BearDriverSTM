@@ -1,0 +1,43 @@
+{
+    "C_Cpp.default.compilerPath": "${env:ARM_TOOLCHAIN_PATH}/bin/arm-none-eabi-gcc.exe",
+    "C_Cpp.default.intelliSenseMode": "gcc-arm",
+    "C_Cpp.default.cStandard": "c11",
+    "C_Cpp.default.cppStandard": "c++14",
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}/**",
+        "${workspaceFolder}/Core/Inc",
+        "${workspaceFolder}/Core/Src",
+        "${workspaceFolder}/Drivers/STM32G4xx_HAL_Driver/Inc",
+        "${workspaceFolder}/Drivers/STM32G4xx_HAL_Driver/Inc/Legacy",
+        "${workspaceFolder}/Drivers/CMSIS/Device/ST/STM32G4xx/Include",
+        "${workspaceFolder}/Drivers/CMSIS/Include"
+    ],
+    "C_Cpp.default.defines": [
+        "USE_HAL_DRIVER",
+        "STM32G474xx"
+    ],
+    "files.associations": {
+        "*.h": "c",
+        "*.c": "c",
+        "main.h": "c",
+        "stm32g4xx_hal.h": "c"
+    },
+    "files.encoding": "utf8",
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "editor.formatOnSave": false,
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "editor.rulers": [
+        80,
+        120
+    ],
+    "cortex-debug.armToolchainPath": "${env:ARM_TOOLCHAIN_PATH}/bin",
+    "cortex-debug.gdbPath": "${env:ARM_TOOLCHAIN_PATH}/bin/arm-none-eabi-gdb.exe",
+    "cortex-debug.variableUseNaturalFormat": true,
+    "search.exclude": {
+        "**/STM32CubeIDE": true,
+        "**/.mxproject": true,
+        "**/Drivers/CMSIS": false
+    }
+}

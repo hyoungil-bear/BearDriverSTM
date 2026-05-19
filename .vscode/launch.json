@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Cortex Debug",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/BearDriverSTM.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "runToEntryPoint": "main",
+            "servertype": "stlink",
+            "device": "STM32G474RE",
+            "interface": "swd",
+            "serialNumber": "",
+            "svdFile": "${workspaceFolder}/STM32G474.svd",
+            "preLaunchTask": "Build STM32 Project"
+        },
+        {
+            "name": "Cortex Debug (Attach)",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/BearDriverSTM.elf",
+            "request": "attach",
+            "type": "cortex-debug",
+            "servertype": "stlink",
+            "device": "STM32G474RE",
+            "interface": "swd",
+            "svdFile": "${workspaceFolder}/STM32G474.svd"
+        }
+    ]
+}
