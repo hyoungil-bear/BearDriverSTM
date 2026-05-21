@@ -466,12 +466,24 @@ void Motor::ISR(USER_Params *userParams) {
   if (!Flag_bypassFaultCheck) {
     if (checkFault()) {
       SetErrorFlag(kGateDriverError);
+      /* Distinguish OCP from OT/UVLO using the FLAG pin (STDRIVE102BH):
+       *   FLAG=H → overcurrent/short-circuit (OCP latch)
+       *   FLAG=L → overtemperature or undervoltage lockout (OT/UVLO latch) */
+      if (gateDriver.getFlag()) {
+        SetErrorFlag(kGateDriverOCPError);
+        ClearErrorFlag(kGateDriverOTUVLOError);
+      } else {
+        SetErrorFlag(kGateDriverOTUVLOError);
+        ClearErrorFlag(kGateDriverOCPError);
+      }
       disablePWM();
       gateDriver.disable();
       Flag_Run_Identify = false;
       return;
     } else {
       ClearErrorFlag(kGateDriverError);
+      ClearErrorFlag(kGateDriverOCPError);
+      ClearErrorFlag(kGateDriverOTUVLOError);
     }
   }
 

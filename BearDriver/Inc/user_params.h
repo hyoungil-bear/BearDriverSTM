@@ -39,11 +39,22 @@ extern "C" {
  *  Base hardware constants
  *===========================================================================*/
 
-/* Power stage */
-#define RSHUNT                          0.005    /*!< Shunt resistance (Ohm) */
-#define AMPLIFICATION_GAIN              12       /*!< Current sense amplifier gain */
-#define VBUS_PARTITIONING_FACTOR        0.05897269564191779  /*!< Vbus resistor divider ratio */
+/* Power stage
+ * Phase current sensing: STDRIVE102BH internal OA (gain 10) + 4 mΩ shunt resistor (R49/R58/R64, motor1=motor2)
+ *   ADC measurable range : ±(ADC_TO_AMPS / 2) = ±41.25 A  (12-bit, Vref/2 mid-rail bias)
+ *   Hardware OCP (CREF)  : CREF = VDDA × R75/(R68+R75) = 3.3 × 7.5K/(100K+7.5K) = 0.230 V
+ *                          I_OCP = CREF / RSHUNT = 0.230 / 0.004 = 57.5 A
+ *                          (fires ~40% above ADC full-scale; IC3/IC4 identical) */
+#define RSHUNT                          0.004    /*!< Shunt resistance (Ohm) — 4 mΩ R6432 (R49/R58/R64) */
+#define AMPLIFICATION_GAIN              10       /*!< Current sense amplifier gain — STDRIVE102BH OA GAIN 10 */
+#define CREF_R_TOP                      100000.0 /*!< OCP CREF divider R68 (Ohm) — 100K 0402 */
+#define CREF_R_BOT                      7500.0   /*!< OCP CREF divider R75 (Ohm) —   7.5K 0402 */
+#define VBUS_PARTITIONING_FACTOR        (10.0 / 110.0)  /*!< Vbus resistor divider: R_bot/(R_top+R_bot) = 10K/(100K+10K) = 1/11 */
 #define ADC_REFERENCE_VOLTAGE           3.3      /*!< ADC reference voltage (V) */
+
+/* ACS71240LLCBTR-050B3 bus current sensor */
+#define ACS71240_SENSITIVITY_V_PER_A    0.0264f  /*!< 26.4 mV/A (±50A range, VCC=3.3V) */
+#define ACS71240_ZERO_CURRENT_V         (ADC_REFERENCE_VOLTAGE * 0.5f)  /*!< VIOUT at 0A = VCC/2 = 1.65V */
 
 /* MCU clock / Timer (STM32G4xx) */
 #define ADV_TIM_CLK_MHz                 170      /*!< Advanced timer clock (MHz) */
@@ -58,8 +69,14 @@ extern "C" {
  *  Derived conversions (depend on base constants above)
  *===========================================================================*/
 
-//! ADC per-unit (0~1) to Amperes: Vref / (Rshunt x Gain) = 3.3 / (0.005 x 12) = 55.0
+//! ADC per-unit (0~1) to Amperes: Vref / (Rshunt x Gain) = 3.3 / (0.004 x 10) = 82.5
 #define ADC_TO_AMPS                     (ADC_REFERENCE_VOLTAGE / (RSHUNT * AMPLIFICATION_GAIN))
+
+//! STDRIVE102BH OCP reference voltage (V): VDDA × R75/(R68+R75) = 3.3 × 7.5K/107.5K = 0.230 V
+#define CREF_VOLTAGE                    (ADC_REFERENCE_VOLTAGE * CREF_R_BOT / (CREF_R_TOP + CREF_R_BOT))
+
+//! Hardware OCP trip current (A): CREF / RSHUNT = 0.230 / 0.004 = 57.5 A  (IC3/IC4 identical)
+#define HW_OCP_CURRENT_A                (CREF_VOLTAGE / RSHUNT)
 
 #define VBUS_ADC_TO_VOLT                (ADC_REFERENCE_VOLTAGE / VBUS_PARTITIONING_FACTOR)
 
@@ -91,6 +108,7 @@ extern "C" {
 #define MOTOR_HW_VERSION_1              1
 #define MOTOR_HW_VERSION_2              2
 #define MOTOR_HW_VERSION_3              3
+#define MOTOR_HW_VERSION_4              4   /*!< Rev M: B3=0 B2=1 B1=0 B0=0 → 0100b */
 #define MOTOR_HW_VERSION_15             15
 
 /*============================================================================
@@ -112,7 +130,7 @@ extern "C" {
  *  TI per-unit ↔ SI gain conversion (empirical mapping)
  *
  *  TI API default:  Kp_pu = 45,  Ki_pu = 300
- *  STM tuned (SI):  Kp_SI = 0.08, Ki_SI = 0.2
+ *  STM tuned (SI):  Kp_SI = 0.08, Ki_SI = 2.0
  *
  *  Conversion (separate for P and I):
  *    Kp_SI = Kp_pu * SPD_KP_PU_TO_SI      Ki_SI = Ki_pu * SPD_KI_PU_TO_SI
@@ -124,7 +142,7 @@ extern "C" {
 #define STM_REF_KI_SI       2.0f               /*!< STM tuned Ki [A/(RPM·s)] */
 
 #define SPD_KP_PU_TO_SI     (STM_REF_KP_SI / TI_REF_KP_PU)   /* = 0.001778 */
-#define SPD_KI_PU_TO_SI     (STM_REF_KI_SI / TI_REF_KI_PU)   /* = 0.000667 */
+#define SPD_KI_PU_TO_SI     (STM_REF_KI_SI / TI_REF_KI_PU)   /* = 0.006667 */
 
 /*  Kd conversion (empirical):
  *    TI  Kd_pu = 0.05   →  STM Kd_SI = 0.0008

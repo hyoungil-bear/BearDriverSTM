@@ -48,7 +48,7 @@ void MX_ADC1_Init(void)
   /** Common config
   */
   hadc1.Instance = ADC1;
-  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc1.Init.GainCompensation = 0;
@@ -154,11 +154,11 @@ void MX_ADC2_Init(void)
   /** Common config
   */
   hadc2.Instance = ADC2;
-  hadc2.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc2.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV4;
   hadc2.Init.Resolution = ADC_RESOLUTION_12B;
   hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc2.Init.GainCompensation = 0;
-  hadc2.Init.ScanConvMode = ADC_SCAN_ENABLE;
+  hadc2.Init.ScanConvMode = ADC_SCAN_DISABLE;
   hadc2.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc2.Init.LowPowerAutoWait = DISABLE;
   hadc2.Init.ContinuousConvMode = DISABLE;
@@ -233,7 +233,7 @@ void MX_ADC3_Init(void)
   /** Common config
   */
   hadc3.Instance = ADC3;
-  hadc3.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc3.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV4;
   hadc3.Init.Resolution = ADC_RESOLUTION_12B;
   hadc3.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc3.Init.GainCompensation = 0;
@@ -288,9 +288,10 @@ void MX_ADC3_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN ADC3_Init 2 */
-  /* Motor1 phase currents: 2 injected channels triggered by TIM20_TRGO
-   * Rank1: CH4  (PE7, ai_OA_OA_1) - Phase A
-   * Rank2: CH12 - Phase C
+  /* Motor1 phase currents: 3 injected channels triggered by TIM20_TRGO (3-shunt)
+   * Rank1: CH4  (PE7, ai_OA_OA_1)  - Phase A
+   * Rank2: CH1  (PB1, ai_OA_OB_1)  - Phase B
+   * Rank3: CH12 (PB0, ai_OA_OC_1)  - Phase C
    */
   {
     ADC_InjectionConfTypeDef sInjCfg = {0};
@@ -300,7 +301,7 @@ void MX_ADC3_Init(void)
     sInjCfg.InjectedSingleDiff       = ADC_SINGLE_ENDED;
     sInjCfg.InjectedOffsetNumber     = ADC_OFFSET_NONE;
     sInjCfg.InjectedOffset           = 0;
-    sInjCfg.InjectedNbrOfConversion  = 2;
+    sInjCfg.InjectedNbrOfConversion  = 3;
     sInjCfg.InjectedDiscontinuousConvMode = DISABLE;
     sInjCfg.AutoInjectedConv         = DISABLE;
     sInjCfg.QueueInjectedContext     = DISABLE;
@@ -309,8 +310,12 @@ void MX_ADC3_Init(void)
     sInjCfg.InjecOversamplingMode    = DISABLE;
     if (HAL_ADCEx_InjectedConfigChannel(&hadc3, &sInjCfg) != HAL_OK) { Error_Handler(); }
 
-    sInjCfg.InjectedChannel = ADC_CHANNEL_12;
+    sInjCfg.InjectedChannel = ADC_CHANNEL_1;
     sInjCfg.InjectedRank    = ADC_INJECTED_RANK_2;
+    if (HAL_ADCEx_InjectedConfigChannel(&hadc3, &sInjCfg) != HAL_OK) { Error_Handler(); }
+
+    sInjCfg.InjectedChannel = ADC_CHANNEL_12;
+    sInjCfg.InjectedRank    = ADC_INJECTED_RANK_3;
     if (HAL_ADCEx_InjectedConfigChannel(&hadc3, &sInjCfg) != HAL_OK) { Error_Handler(); }
   }
   /* USER CODE END ADC3_Init 2 */
@@ -324,7 +329,7 @@ void MX_ADC4_Init(void)
 
   /* USER CODE END ADC4_Init 0 */
 
-  ADC_InjectionConfTypeDef sConfigInjected = {0};
+  ADC_ChannelConfTypeDef sConfig = {0};
 
   /* USER CODE BEGIN ADC4_Init 1 */
 
@@ -333,16 +338,18 @@ void MX_ADC4_Init(void)
   /** Common config
   */
   hadc4.Instance = ADC4;
-  hadc4.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc4.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV4;
   hadc4.Init.Resolution = ADC_RESOLUTION_12B;
   hadc4.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc4.Init.GainCompensation = 0;
-  hadc4.Init.ScanConvMode = ADC_SCAN_ENABLE;
+  hadc4.Init.ScanConvMode = ADC_SCAN_DISABLE;
   hadc4.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc4.Init.LowPowerAutoWait = DISABLE;
   hadc4.Init.ContinuousConvMode = DISABLE;
   hadc4.Init.NbrOfConversion = 1;
   hadc4.Init.DiscontinuousConvMode = DISABLE;
+  hadc4.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc4.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc4.Init.DMAContinuousRequests = DISABLE;
   hadc4.Init.Overrun = ADC_OVR_DATA_PRESERVED;
   hadc4.Init.OversamplingMode = DISABLE;
@@ -351,59 +358,31 @@ void MX_ADC4_Init(void)
     Error_Handler();
   }
 
-  /** Configure Injected Channel
+  /** Configure Regular Channel
   */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_1;
-  sConfigInjected.InjectedRank = ADC_INJECTED_RANK_1;
-  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_6CYCLES_5;
-  sConfigInjected.InjectedSingleDiff = ADC_SINGLE_ENDED;
-  sConfigInjected.InjectedOffsetNumber = ADC_OFFSET_NONE;
-  sConfigInjected.InjectedOffset = 0;
-  sConfigInjected.InjectedNbrOfConversion = 2;
-  sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;
-  sConfigInjected.AutoInjectedConv = DISABLE;
-  sConfigInjected.QueueInjectedContext = DISABLE;
-  sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJEC_T20_TRGO;
-  sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONV_EDGE_RISING;
-  sConfigInjected.InjecOversamplingMode = DISABLE;
-  if (HAL_ADCEx_InjectedConfigChannel(&hadc4, &sConfigInjected) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Injected Channel
-  */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_5;
-  sConfigInjected.InjectedRank = ADC_INJECTED_RANK_2;
-  if (HAL_ADCEx_InjectedConfigChannel(&hadc4, &sConfigInjected) != HAL_OK)
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_2CYCLES_5;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 0;
+  if (HAL_ADC_ConfigChannel(&hadc4, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
   /* USER CODE BEGIN ADC4_Init 2 */
-  /* Motor1 phase currents: 2 injected channels triggered by TIM20_TRGO (alongside ADC3)
-   * Rank1: CH1 (PE14, ai_OA_OB_1) - Phase B
-   * Rank2: CH5
+  /* Configure regular channel: CH1 (PE14, ai_Thermistor_1)
+   * SW-triggered single conversion, 47.5-cycle sampling for NTC.
    */
   {
-    ADC_InjectionConfTypeDef sInjCfg = {0};
-    sInjCfg.InjectedChannel          = ADC_CHANNEL_1;
-    sInjCfg.InjectedRank             = ADC_INJECTED_RANK_1;
-    sInjCfg.InjectedSamplingTime     = ADC_SAMPLETIME_6CYCLES_5;
-    sInjCfg.InjectedSingleDiff       = ADC_SINGLE_ENDED;
-    sInjCfg.InjectedOffsetNumber     = ADC_OFFSET_NONE;
-    sInjCfg.InjectedOffset           = 0;
-    sInjCfg.InjectedNbrOfConversion  = 2;
-    sInjCfg.InjectedDiscontinuousConvMode = DISABLE;
-    sInjCfg.AutoInjectedConv         = DISABLE;
-    sInjCfg.QueueInjectedContext     = DISABLE;
-    sInjCfg.ExternalTrigInjecConv    = ADC_EXTERNALTRIGINJEC_T20_TRGO;
-    sInjCfg.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONV_EDGE_RISING;
-    sInjCfg.InjecOversamplingMode    = DISABLE;
-    if (HAL_ADCEx_InjectedConfigChannel(&hadc4, &sInjCfg) != HAL_OK) { Error_Handler(); }
-
-    sInjCfg.InjectedChannel = ADC_CHANNEL_5;
-    sInjCfg.InjectedRank    = ADC_INJECTED_RANK_2;
-    if (HAL_ADCEx_InjectedConfigChannel(&hadc4, &sInjCfg) != HAL_OK) { Error_Handler(); }
+    ADC_ChannelConfTypeDef sRegCfg = {0};
+    sRegCfg.Channel      = ADC_CHANNEL_1;
+    sRegCfg.Rank         = ADC_REGULAR_RANK_1;
+    sRegCfg.SamplingTime = ADC_SAMPLETIME_47CYCLES_5;
+    sRegCfg.SingleDiff   = ADC_SINGLE_ENDED;
+    sRegCfg.OffsetNumber = ADC_OFFSET_NONE;
+    sRegCfg.Offset       = 0;
+    if (HAL_ADC_ConfigChannel(&hadc4, &sRegCfg) != HAL_OK) { Error_Handler(); }
   }
   /* USER CODE END ADC4_Init 2 */
 
@@ -425,7 +404,7 @@ void MX_ADC5_Init(void)
   /** Common config
   */
   hadc5.Instance = ADC5;
-  hadc5.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc5.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV4;
   hadc5.Init.Resolution = ADC_RESOLUTION_12B;
   hadc5.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc5.Init.GainCompensation = 0;
@@ -502,23 +481,15 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* adcHandle)
     }
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
     /**ADC1 GPIO Configuration
     PC0     ------> ADC1_IN6
     PC1     ------> ADC1_IN7
     PC2     ------> ADC1_IN8
-    PC3     ------> ADC1_IN9
-    PB0     ------> ADC1_IN15
     */
-    GPIO_InitStruct.Pin = ai_OA_OA_2_Pin|ai_OA_OB_2_Pin|ai_OA_OC_2_Pin|ai_Vref_Pin;
+    GPIO_InitStruct.Pin = ai_OA_OA_2_Pin|ai_OA_OB_2_Pin|ai_OA_OC_2_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = ai_OA_OC_1_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(ai_OA_OC_1_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN ADC1_MspInit 1 */
 
@@ -582,13 +553,14 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* adcHandle)
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOE_CLK_ENABLE();
     /**ADC3 GPIO Configuration
+    PB0     ------> ADC3_IN12
     PB1     ------> ADC3_IN1
     PE7     ------> ADC3_IN4
     */
-    GPIO_InitStruct.Pin = ai_Thermistor_1_Pin;
+    GPIO_InitStruct.Pin = ai_OA_OC_1_Pin|ai_OA_OB_1_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(ai_Thermistor_1_GPIO_Port, &GPIO_InitStruct);
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     GPIO_InitStruct.Pin = ai_OA_OA_1_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
@@ -624,10 +596,10 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* adcHandle)
     /**ADC4 GPIO Configuration
     PE14     ------> ADC4_IN1
     */
-    GPIO_InitStruct.Pin = ai_OA_OB_1_Pin;
+    GPIO_InitStruct.Pin = ai_Thermistor_1_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(ai_OA_OB_1_GPIO_Port, &GPIO_InitStruct);
+    HAL_GPIO_Init(ai_Thermistor_1_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN ADC4_MspInit 1 */
 
@@ -688,12 +660,8 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* adcHandle)
     PC0     ------> ADC1_IN6
     PC1     ------> ADC1_IN7
     PC2     ------> ADC1_IN8
-    PC3     ------> ADC1_IN9
-    PB0     ------> ADC1_IN15
     */
-    HAL_GPIO_DeInit(GPIOC, ai_OA_OA_2_Pin|ai_OA_OB_2_Pin|ai_OA_OC_2_Pin|ai_Vref_Pin);
-
-    HAL_GPIO_DeInit(ai_OA_OC_1_GPIO_Port, ai_OA_OC_1_Pin);
+    HAL_GPIO_DeInit(GPIOC, ai_OA_OA_2_Pin|ai_OA_OB_2_Pin|ai_OA_OC_2_Pin);
 
     /* ADC1 interrupt Deinit */
   /* USER CODE BEGIN ADC1:ADC1_2_IRQn disable */
@@ -749,10 +717,11 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* adcHandle)
     }
 
     /**ADC3 GPIO Configuration
+    PB0     ------> ADC3_IN12
     PB1     ------> ADC3_IN1
     PE7     ------> ADC3_IN4
     */
-    HAL_GPIO_DeInit(ai_Thermistor_1_GPIO_Port, ai_Thermistor_1_Pin);
+    HAL_GPIO_DeInit(GPIOB, ai_OA_OC_1_Pin|ai_OA_OB_1_Pin);
 
     HAL_GPIO_DeInit(ai_OA_OA_1_GPIO_Port, ai_OA_OA_1_Pin);
 
@@ -776,7 +745,7 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* adcHandle)
     /**ADC4 GPIO Configuration
     PE14     ------> ADC4_IN1
     */
-    HAL_GPIO_DeInit(ai_OA_OB_1_GPIO_Port, ai_OA_OB_1_Pin);
+    HAL_GPIO_DeInit(ai_Thermistor_1_GPIO_Port, ai_Thermistor_1_Pin);
 
   /* USER CODE BEGIN ADC4_MspDeInit 1 */
 

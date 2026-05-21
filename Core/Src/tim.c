@@ -389,7 +389,8 @@ void MX_TIM8_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM8_Init 2 */
-
+  /* Ebrake PWM 20 kHz: ARR = 170 MHz / 20 kHz − 1 = 8499 */
+  __HAL_TIM_SET_AUTORELOAD(&htim8, 8499U);
   /* USER CODE END TIM8_Init 2 */
   HAL_TIM_MspPostInit(&htim8);
 
@@ -450,7 +451,8 @@ void MX_TIM15_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM15_Init 2 */
-
+  /* Ebrake PWM 20 kHz: ARR = 170 MHz / 20 kHz − 1 = 8499 */
+  __HAL_TIM_SET_AUTORELOAD(&htim15, 8499U);
   /* USER CODE END TIM15_Init 2 */
   HAL_TIM_MspPostInit(&htim15);
 

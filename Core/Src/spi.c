@@ -56,10 +56,11 @@ void MX_SPI3_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN SPI3_Init 2 */
-  /* Safety net: re-apply SPI Mode 0 and prescaler for FM25V02A FRAM */
+  /* Safety net: re-apply SPI Mode 0, prescaler, and NSS pulse setting for FM25V02A FRAM */
   hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi3.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi3.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;  /* Prevent inter-byte NSS pulse that could corrupt multi-byte transfers */
   if (HAL_SPI_Init(&hspi3) != HAL_OK) { Error_Handler(); }
   /* USER CODE END SPI3_Init 2 */
 
@@ -100,7 +101,13 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /* USER CODE BEGIN SPI3_MspInit 1 */
-
+  /* Override GPIO speed to MEDIUM (25 MHz) for 10.625 MHz SPI clock.
+   * CubeMX default LOW (~5 MHz) is insufficient for reliable signal integrity. */
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
+  GPIO_InitStruct.Pin = SPI3_FLASH_Pin;
+  HAL_GPIO_Init(SPI3_FLASH_GPIO_Port, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = spi3_SCK_Pin|SPI3_MISO_Pin|SPI3_MOSI_Pin;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
   /* USER CODE END SPI3_MspInit 1 */
   }
 }

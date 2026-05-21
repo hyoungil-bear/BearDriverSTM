@@ -44,29 +44,29 @@
   * @note   uint8_t: each slot holds exactly one received byte.
   *         uint16_t was a bug — memcpy into BasePacket_t read interleaved zeros.
   */
-static volatile uint8_t rx_isr_buffer[2][SIZE_RX_BUFFER];
-volatile uint16_t rx_isr_in_idx[2]  = {0, 0};   /*!< Written by ISR, read by main loop */
-volatile uint16_t rx_isr_out_idx[2] = {0, 0};   /*!< Written by main loop, read by ISR */
+static volatile uint8_t rx_isr_buffer[3][SIZE_RX_BUFFER];
+volatile uint16_t rx_isr_in_idx[3]  = {0, 0, 0};   /*!< Written by ISR, read by main loop */
+volatile uint16_t rx_isr_out_idx[3] = {0, 0, 0};   /*!< Written by main loop, read by ISR */
 
 /**
   * @brief  Transmit ISR buffers (circular)
   */
-static volatile uint8_t tx_isr_buffer[2][SIZE_TX_BUFFER];
-volatile uint16_t tx_isr_in_idx[2]  = {0, 0};   /*!< Written by main loop, read by ISR */
-volatile uint16_t tx_isr_out_idx[2] = {0, 0};   /*!< Written by ISR, read by main loop */
+static volatile uint8_t tx_isr_buffer[3][SIZE_TX_BUFFER];
+volatile uint16_t tx_isr_in_idx[3]  = {0, 0, 0};   /*!< Written by main loop, read by ISR */
+volatile uint16_t tx_isr_out_idx[3] = {0, 0, 0};   /*!< Written by ISR, read by main loop */
 
 /**
   * @brief  SLIP decoding buffers
   * @note   uint8_t: required for correct memcpy into BasePacket_t.
   *         uint16_t caused arg1/arg2 corruption (zero bytes interleaved every 2nd byte).
   */
-static uint8_t rx_slip_buffer[2][SIZE_RX_BUFFER];
-static uint16_t rx_slip_idx[2] = {0, 0};
+static uint8_t rx_slip_buffer[3][SIZE_RX_BUFFER];
+static uint16_t rx_slip_idx[3] = {0, 0, 0};
 
 /**
   * @brief  SLIP decoder state
   */
-static SLIP_RX_STATE slip_state[2] = {SRX_IDLE, SRX_IDLE};
+static SLIP_RX_STATE slip_state[3] = {SRX_IDLE, SRX_IDLE, SRX_IDLE};
 
 /**
   * @brief  Base communication check timer
@@ -76,14 +76,14 @@ volatile uint32_t base_com_check_timer_10ms = 0;
 /**
   * @brief  RS485 direction control
   */
-static bool rs485_tx_active[2] = {false, false};
+static bool rs485_tx_active[3] = {false, false, false};
 
 /**
   * @brief  Error statistics (accessible via extern in sci_coms.h for debugger watch)
   */
-uint32_t SCI_RxOverflow[2]  = {0, 0};  /*!< RX ring buffer overflow (ISR dropped bytes) */
-uint32_t SCI_CrcErrors[2]   = {0, 0};  /*!< CRC mismatch on received packet */
-uint32_t SCI_SlipErrors[2]  = {0, 0};  /*!< SLIP decode error (overflow / bad escape / restart) */
+uint32_t SCI_RxOverflow[3]  = {0, 0, 0};  /*!< RX ring buffer overflow (ISR dropped bytes) */
+uint32_t SCI_CrcErrors[3]   = {0, 0, 0};  /*!< CRC mismatch on received packet */
+uint32_t SCI_SlipErrors[3]  = {0, 0, 0};  /*!< SLIP decode error (overflow / bad escape / restart) */
 
 /* Private function prototypes -----------------------------------------------*/
 
@@ -104,10 +104,12 @@ static UART_HandleTypeDef* SCI_GetUartHandle(SCI_Device_e dev);
   */
 static UART_HandleTypeDef* SCI_GetUartHandle(SCI_Device_e dev)
 {
-  if (dev == SCI_A_FD) {
-    return &huart2;  /* USART2 for debug */
+  if (dev == SCI_USART1) {
+    return &huart1;  /* USART1 - STM bootloader (115200, no FIFO) */
+  } else if (dev == SCI_USART2) {
+    return &huart2;  /* USART2 - debug (921600, FIFO) */
   } else {
-    return &huart3;  /* USART3 for RS485 */
+    return &huart3;  /* USART3 - RS485 API (230400, FIFO) */
   }
 }
 
@@ -178,9 +180,13 @@ static void SCI_WriteTxBuffer(SCI_Device_e dev, uint8_t c)
   tx_isr_buffer[dev][tx_isr_in_idx[dev]] = c;
   tx_isr_in_idx[dev] = (tx_isr_in_idx[dev] + 1) & TX_BUFFER_LEN_MASK;
 
-  /* Enable TX FIFO threshold interrupt (both USART2 and USART3 use FIFO mode) */
+  /* Enable TX interrupt: TXE for USART1 (no FIFO), TXFT for USART2/3 (FIFO) */
   UART_HandleTypeDef *huart = SCI_GetUartHandle(dev);
-  __HAL_UART_ENABLE_IT(huart, UART_IT_TXFT);
+  if (dev == SCI_USART1) {
+    __HAL_UART_ENABLE_IT(huart, UART_IT_TXE);
+  } else {
+    __HAL_UART_ENABLE_IT(huart, UART_IT_TXFT);
+  }
 }
 
 /* Exported functions --------------------------------------------------------*/
@@ -191,9 +197,10 @@ static void SCI_WriteTxBuffer(SCI_Device_e dev, uint8_t c)
   */
 void SCI_Init(void)
 {
-  /* Initialize both devices */
-  SCI_Device_Init(SCI_A_FD);
-  SCI_Device_Init(SCI_B_FD);
+  /* Initialize all devices */
+  SCI_Device_Init(SCI_USART1);
+  SCI_Device_Init(SCI_USART2);
+  SCI_Device_Init(SCI_USART3);
 
   /* Initialize communication check timer */
   base_com_check_timer_10ms = 0;
@@ -228,11 +235,8 @@ void SCI_Device_Init(SCI_Device_e dev)
   UART_HandleTypeDef *huart = SCI_GetUartHandle(dev);
   __HAL_UART_ENABLE_IT(huart, UART_IT_RXNE);
 
-  /* Set RS485 to receive mode if applicable */
-  if (dev == SCI_B_FD) {
-    /* TODO: Set RS485 DE pin to receive mode */
-    /* HAL_GPIO_WritePin(RS485_DE_GPIO_Port, RS485_DE_Pin, GPIO_PIN_RESET); */
-  }
+  /* RS485 direction (PB14 = USART3_DE, AF7): hardware-controlled automatically.
+   * No software GPIO write needed — USART3_DE drives do_485_Dir. */
 }
 
 /**
@@ -246,7 +250,7 @@ void SCI_ProcessHostComs(void)
   uint32_t arg1, arg2;
 
   /* Process RS485 (SCI_B) */
-  SCI_Device_e dev = SCI_B_FD;
+  SCI_Device_e dev = SCI_USART3;
 
   /* RS485 DE is controlled automatically by USART3 hardware (AF7, HAL_RS485Ex_Init).
    * rs485_tx_active tracks TX state for RX suppression only. */
@@ -330,7 +334,7 @@ void SCI_SendPacket(SCI_Device_e dev, const MotorPacket_t *packet)
 {
   /* DE is asserted automatically by USART3 hardware (PB14 = AF7 USART3_DE).
    * rs485_tx_active tracks TX in-progress for RX suppression. */
-  if (dev == SCI_B_FD) {
+  if (dev == SCI_USART3) {
     rs485_tx_active[dev] = true;
   }
 
@@ -514,20 +518,25 @@ void SCI_TxCallback(SCI_Device_e dev)
 {
   UART_HandleTypeDef *huart = SCI_GetUartHandle(dev);
 
-  /* Both USART2 and USART3 use FIFO mode: drain ring buffer while TXFNF */
+  /* Drain ring buffer while TX data register / FIFO not full */
   while (!SCI_IsTxBufferEmpty(dev) &&
          __HAL_UART_GET_FLAG(huart, UART_FLAG_TXE)) {
     huart->Instance->TDR = (uint8_t)tx_isr_buffer[dev][tx_isr_out_idx[dev]];
     tx_isr_out_idx[dev] = (tx_isr_out_idx[dev] + 1) & TX_BUFFER_LEN_MASK;
   }
   if (SCI_IsTxBufferEmpty(dev)) {
-    __HAL_UART_DISABLE_IT(huart, UART_IT_TXFT);
+    /* Disable TX interrupt: TXE for USART1 (no FIFO), TXFT for USART2/3 (FIFO) */
+    if (dev == SCI_USART1) {
+      __HAL_UART_DISABLE_IT(huart, UART_IT_TXE);
+    } else {
+      __HAL_UART_DISABLE_IT(huart, UART_IT_TXFT);
+    }
   }
 }
 
 /**
   * @brief  Printf-style formatted output to SCI device (debug)
-  * @param  dev: Device identifier (SCI_A_FD for debug)
+  * @param  dev: Device identifier (SCI_USART2 for debug)
   * @param  fmt: printf format string
   * @retval None
   */

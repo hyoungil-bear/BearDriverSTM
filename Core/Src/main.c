@@ -30,6 +30,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "bear_driver.h"
+#include "debug.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -119,6 +120,7 @@ int main(void)
   /* Initialize interrupts */
   MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
+  Debug_Init();
   BearDriver_Main();  /* never returns — contains its own infinite loop */
   /* USER CODE END 2 */
 
@@ -216,6 +218,9 @@ static void MX_NVIC_Init(void)
   /* TIM5_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(TIM5_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(TIM5_IRQn);
+  /* USART1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(USART1_IRQn, 3, 0);
+  HAL_NVIC_EnableIRQ(USART1_IRQn);
 }
 
 /* USER CODE BEGIN 4 */

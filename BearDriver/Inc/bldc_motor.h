@@ -40,7 +40,7 @@
 #define MOTOR_CTRL_MODE_PWM_FORCE (3)
 
 #ifndef MOTOR_CTRL_MODE
-#define MOTOR_CTRL_MODE         MOTOR_CTRL_MODE_DALIGN
+#define MOTOR_CTRL_MODE         MOTOR_CTRL_MODE_SPEED
 #endif
 
 //! \brief  Id setpoint used in D-axis alignment mode (Amps)
@@ -84,10 +84,10 @@
 #define MOTOR_ENCODER_PHASE_ANGLE_THRESHOLD (0.333f)
 
 //! \brief  Current offset calibration validation thresholds [A]
-//!         Matches TI: ±1.05A acceptable range around ideal zero-current offset
+//!         Matches TI: ±7.05A acceptable range around ideal zero-current offset
 #define MOTOR_OFFSET_IDEAL_I_A   (0.0f)    //!< Ideal current offset at zero current [A]
-#define MOTOR_OFFSET_MIN_I_A     (-1.05f)  //!< Minimum acceptable offset [A]
-#define MOTOR_OFFSET_MAX_I_A     (1.05f)   //!< Maximum acceptable offset [A]
+#define MOTOR_OFFSET_MIN_I_A     (-7.05f)  //!< Minimum acceptable offset [A]
+#define MOTOR_OFFSET_MAX_I_A     (7.05f)   //!< Maximum acceptable offset [A]
 
 // **************************************************************************
 // the typedefs
@@ -125,6 +125,7 @@ typedef struct {
   MATH_vec3 I;               //!< Three phase currents (ADC fraction 0~1.0)
   float dcBus;               //!< DC bus voltage (ADC fraction 0~1.0)
   uint32_t temperature_adc;  //!< NTC thermistor raw ADC value (ADC3_IN5, 12-bit)
+  float IBus_A;              //!< DC bus current [A] from ACS71240LLCBTR-050B3 (ai_Current, ADC5_CH10)
 } HAL_AdcData_t;
 
 // **************************************************************************
@@ -146,6 +147,8 @@ class Motor {
     kCommunicationsError = (1 << 8),   //!< Communications timeout
     kEStopError = (1 << 9),            //!< E-Stop active
     kOffsetCalibrationWarning = (1 << 10),  //!< Offset calibration out of range, using ideal value
+    kGateDriverOCPError    = (1 << 11),  //!< Gate driver OCP:   nFAULT=L + FLAG=H (overcurrent/short-circuit)
+    kGateDriverOTUVLOError = (1 << 12),  //!< Gate driver OT/UVLO: nFAULT=L + FLAG=L (overtemperature or undervoltage)
   };
 
   //! \brief  Error codes that indicate warnings (motors not disabled)

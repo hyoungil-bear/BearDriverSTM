@@ -3,7 +3,7 @@
 > **문서번호**: SDD-BEARDRV-STM32-002
 > **프로젝트**: BearDriverSTM - 듀얼 BLDC/PMSM 모터 드라이브 컨트롤러
 > **MCU**: STM32G474VETx (ARM Cortex-M4F @ 170MHz, LQFP100)
-> **펌웨어 버전**: 7.0.0.0
+> **펌웨어 버전**: 6.0.0.0
 > **플랫폼**: STM32G474
 > **작성일**: 2026-04-24
 > **원본**: TI C2000 BearDriver → STM32G474 포팅 (BearDriverSTM_EV 기반 확장)
@@ -75,7 +75,7 @@ BearDriverSTM은 서비스 로봇 구동용 듀얼 BLDC/PMSM 모터 제어 펌�
 | 속도 루프 | 1 kHz (FOC 10분주) |
 | 메인 루프 | ~4.5 kHz |
 | 제어 모터 수 | 2 (듀얼, 독립 타이머) |
-| 전류 감지 | 2-shunt (Phase A+B 측정, Phase C = Kirchhoff) |
+| 전류 감지 | 3-shunt (Phase A/B/C 직접 측정) |
 | 피드백 센서 | 쿼드러처 인코더 + 홀 센서 |
 | 통신 | UART×2 + RS485 (SLIP 프로토콜) |
 | 비휘발성 저장 | SPI FRAM (FM25V02A, 32KB) |
@@ -92,8 +92,8 @@ BearDriverSTM은 서비스 로봇 구동용 듀얼 BLDC/PMSM 모터 제어 펌�
 | Motor1 PWM | EPWM1A/1B~3A/3B | **TIM1** CH1-3/CH1N-3N (PE8~PE13) |
 | Motor2 PWM | 공유 EPWM (소프트웨어 분할) | **TIM20** CH1-3/CH1N-3N (PE2~PE6, PF2) 독립 타이머 |
 | ISR 인터리빙 | 소프트웨어 인터리빙 | **TIM20 CNT=ARR 오프셋** (하드웨어 반주기 분리) |
-| 전류 감지 | 3-shunt (DRV8323 내장 앰프) | **2-shunt** (외장 OPA, Phase C = Kirchhoff) |
-| 전류 ADC | 단일 ADC 다중 SOC | **ADC3+ADC4** (M1) + **ADC1+ADC2** (M2) 교차 트리거 |
+| 전류 감지 | 3-shunt (DRV8323 내장 앰프) | **3-shunt** (외장 OPA, Phase A/B/C 직접 측정) |
+| 전류 ADC | 단일 ADC 다중 SOC | **ADC3** 3채널 (M1 A/B/C) + **ADC4** (M1 Therm) + **ADC1** 3채널 (M2 A/B/C) |
 | Vbus ADC | ISR 내부 ADC 읽기 | **ADC5** (SysTick 1kHz, read-then-start) |
 | 인코더 | QEP 모듈 (EQEP1/2) | **TIM5** (M1, PA0/PA1) + **TIM2** (M2, PD3/PD4) |
 | 저속 캡처 | QEP 캡처 유닛 | **TIM3_CH2** (M1, PA4) + **TIM4_CH1** (M2, PB6) |
@@ -235,8 +235,8 @@ bear_driver ─┬→ bldc_motor ─┬→ pid
 | **ADC4** | Motor1 전류 | Injected: CH1(PE14):PhB | TIM20_TRGO (ADC3 동기) |
 | **ADC5** | 버스 전압/전류 | Regular: CH9(PD12):Voltage, CH10(PD13):Current | SW 트리거, SysTick 1kHz 폴링 |
 | **USART1** | Base 통신 | TX(PA9), RX(PA10) | 115200 baud |
-| **USART2** | 디버그/부트로더 | TX(PA2), RX(PA3) | 921600 baud (SCIA_BAUD_RATE 오버라이드) |
-| **USART3** | RS485 API | TX(PD8), RX(PD9), DE(PB14/AF7) | 115200 baud, HAL_RS485Ex_Init |
+| **USART2** | 디버그/부트로더 | TX(PA2), RX(PA3) | 921600 baud (USART2_BAUD_RATE 오버라이드) |
+| **USART3** | RS485 API | TX(PD8), RX(PD9), DE(PB14/AF7) | 230400 baud, HAL_RS485Ex_Init |
 | **SPI3** | FRAM (FM25V02A) | SCK(PC10), MOSI(PC12), MISO(PC11), NSS(PA15) | 10.625 MHz (DIV16), Mode 0, HW NSS |
 | **DAC1** | 디버그 출력1 | CH2(PA5) | 12-bit, SW 트리거 |
 | **DAC2** | 디버그 출력2 | CH1(PA6) | 12-bit, SW 트리거 |
@@ -273,11 +273,12 @@ bear_driver ─┬→ bldc_motor ─┬→ pid
 | 핀 | 기능 | ADC | 설명 |
 |----|------|-----|------|
 | PE7 | ai_OA_OA_1 | ADC3_CH4 | Motor1 Phase A |
-| PE14 | ai_OA_OB_1 | ADC4_CH1 | Motor1 Phase B |
-| PB0 | ai_OA_OC_1 | — | Motor1 Phase C (미사용, 2-shunt Kirchhoff) |
+| PB1 | ai_OA_OB_1 | ADC3_CH1 | Motor1 Phase B |
+| PB0 | ai_OA_OC_1 | ADC3_CH12 | Motor1 Phase C |
+| PE14 | ai_Thermistor_1 | ADC4_CH1 | Motor1 Thermistor |
 | PC0 | ai_OA_OA_2 | ADC1_CH6 | Motor2 Phase A |
 | PC1 | ai_OA_OB_2 | ADC1_CH7 | Motor2 Phase B |
-| PC2 | ai_OA_OC_2 | — | Motor2 Phase C (미사용, 2-shunt Kirchhoff) |
+| PC2 | ai_OA_OC_2 | ADC1_CH8 | Motor2 Phase C |
 | PC3 | ai_Vref | ADC1_CH9 | 기준 전압 |
 
 #### 버스 전압/전류 및 서미스터
@@ -428,7 +429,7 @@ STATE_INIT ─→ STATE_CALC_OFFSETS ─→ STATE_RUN ─┬→ STATE_FAULT ─�
 | 상태 | 동작 | TI 대비 |
 |------|------|---------|
 | `STATE_INIT` | 주변장치 초기화, ADC 캘리브레이션, 파라미터 로드 | TI: HAL_init()+PIE, STM32: HAL_Init()+NVIC |
-| `STATE_CALC_OFFSETS` | ADC 전류 오프셋 IIR 필터 (1초, 10000샘플) + ±1.05A 범위 검증 | TI: 단일 모터, STM32: 양쪽 독립 |
+| `STATE_CALC_OFFSETS` | ADC 전류 오프셋 IIR 필터 (1초, 10000샘플) + ±7.05A 범위 검증 | TI: 단일 모터, STM32: 양쪽 독립 |
 | `STATE_RUN` | 정상 운전 — FOC + 속도루프 + 통신 | TI와 동일한 제어 흐름 |
 | `STATE_SS2_ESTOP` | S-curve 감속 → PWM OFF → 브레이크 ON | TI: GPIO 브레이크, STM32: TIM8/TIM15 PWM |
 | `STATE_FAULT` | PWM 비활성, 에러 코드 보고, 호스트 대기 | TI와 동일 |
@@ -539,22 +540,22 @@ ISR:  M2   M1   M2   M1   M2   M1    ← 교대 실행 (~50μs 간격)
 
 **파일**: `BearDriver/Inc/bldc_motor.h`, `BearDriver/Src/bldc_motor.cpp`
 
-TI 원본과 동일한 FOC 알고리즘 (Clarke → Park → PID(Id,Iq) → Inv.Park → SVM). 수치 연산: TI `_iq` 고정소수점 → STM32 `float` (HW FPU). 전류 감지: TI 3-shunt (DRV8323 내장 앰프) → STM32 **2-shunt** (외장 OPA, Phase C = Kirchhoff).
+TI 원본과 동일한 FOC 알고리즘 (Clarke → Park → PID(Id,Iq) → Inv.Park → SVM). 수치 연산: TI `_iq` 고정소수점 → STM32 `float` (HW FPU). 전류 감지: TI 3-shunt (DRV8323 내장 앰프) → STM32 **3-shunt** (외장 OPA, Phase A/B/C 직접 측정).
 
-#### 4.2.1 2-Shunt FOC ISR 흐름
+#### 4.2.1 3-Shunt FOC ISR 흐름
 
 ```
 Motor1_ADC_ReadAndISR() [ADC3 JEOS, TIM20_TRGO]
-  ├→ PhA = ADC3 Rank1 (PE7) × (ADC_TO_AMPS / 65536)
-  ├→ PhB = ADC4 Rank1 (PE14) × (ADC_TO_AMPS / 65536)
-  ├→ PhC = -(PhA + PhB)   ← Kirchhoff
-  ├→ Thermistor = ADC3 Rank2 (PB1)
+  ├→ PhA = ADC3 Rank1 (PE7, CH4)  × (ADC_TO_AMPS / 4096)
+  ├→ PhB = ADC3 Rank2 (PB1, CH1)  × (ADC_TO_AMPS / 4096)
+  ├→ PhC = ADC3 Rank3 (PB0, CH12) × (ADC_TO_AMPS / 4096)
+  ├→ Thermistor = ADC4 Rank1 (PE14, CH1)
   └→ Motor1_ISR_Handler()
 
 Motor2_ADC_ReadAndISR() [ADC1 JEOS, TIM1_TRGO]
-  ├→ PhA = ADC1 Rank1 (PC0) × (ADC_TO_AMPS / 65536)
-  ├→ PhB = ADC1 Rank2 (PC1) × (ADC_TO_AMPS / 65536)
-  ├→ PhC = -(PhA + PhB)   ← Kirchhoff
+  ├→ PhA = ADC1 Rank1 (PC0, CH6) × (ADC_TO_AMPS / 4096)
+  ├→ PhB = ADC1 Rank2 (PC1, CH7) × (ADC_TO_AMPS / 4096)
+  ├→ PhC = ADC1 Rank3 (PC2, CH8) × (ADC_TO_AMPS / 4096)
   ├→ Thermistor = ADC2 Rank1 (PB2)
   └→ Motor2_ISR_Handler()
 ```
@@ -692,8 +693,8 @@ TI SCI 모듈을 STM32 USART로 포팅. SLIP 프로토콜, 버퍼 구조, 상태
 
 ```c
 typedef enum {
-  SCI_A_FD = 0,   // USART2 (PA2/PA3, 921600 baud)
-  SCI_B_FD = 1    // USART3 (PD8/PD9/PB14, 115200 baud)
+  SCI_USART2 = 0,   // USART2 (PA2/PA3, 921600 baud)
+  SCI_USART3 = 1    // USART3 (PD8/PD9/PB14, 230400 baud)
 } SCI_Device_e;
 ```
 
@@ -709,7 +710,7 @@ typedef enum {
 
 #### 4.8.2 TX FIFO 모드 (USART2 + USART3)
 
-USART2(SCI_A_FD) 및 USART3(SCI_B_FD) 모두 TX FIFO 8단계 활성화, threshold = 1/2(4바이트). TXFT 인터럽트로 ISR 횟수 ~4배 감소. `SCI_WriteTxBuffer`, `SCI_TxCallback` 분기 없이 단일 경로.
+USART2(SCI_USART2) 및 USART3(SCI_USART3) 모두 TX FIFO 8단계 활성화, threshold = 1/2(4바이트). TXFT 인터럽트로 ISR 횟수 ~4배 감소. `SCI_WriteTxBuffer`, `SCI_TxCallback` 분기 없이 단일 경로.
 
 ```
 SCI_WriteTxBuffer(c)
@@ -760,7 +761,7 @@ ISR 오버런 방지 + RX 원형버퍼 풀 시 `SCI_RxOverflow[dev]++` 계수.
 | `SCI_TxEmpty(dev)` | TX 완료 확인 (SW 버퍼 + UART_FLAG_TC) |
 | `SCI_RxCallback(dev, data)` | RX ISR 콜백 (버퍼 풀 시 SCI_RxOverflow 계수) |
 | `SCI_TxCallback(dev)` | TX ISR 콜백 (FIFO 드레인, 양쪽 USART 동일 경로) |
-| `SCI_Printf(dev, fmt, ...)` | printf 형식 디버그 출력 (SCI_A_FD 권장) |
+| `SCI_Printf(dev, fmt, ...)` | printf 형식 디버그 출력 (SCI_USART2 권장) |
 
 ---
 
@@ -1048,7 +1049,7 @@ PWM (10kHz) ─→ [÷1] ─→ ADC trigger ─→ ISR (10kHz per motor)
 |-----------|-----|---------|------|------|
 | USART1 | PA9/PA10 | 115200 | Full-duplex | Base 통신 (예약) |
 | USART2 | PA2/PA3 | 921600 | Full-duplex | 디버그, STM 부트로더 |
-| USART3 | PD8/PD9/PB14 | 115200 | RS485 Half-duplex | 호스트 API |
+| USART3 | PD8/PD9/PB14 | 230400 | RS485 Half-duplex | 호스트 API |
 
 ### 8.2 SLIP 프로토콜
 
@@ -1068,7 +1069,7 @@ PWM (10kHz) ─→ [÷1] ─→ ADC trigger ─→ ISR (10kHz per motor)
 
 - 트랜시버: MAX3485EESA+
 - DE 제어: PB14 = USART3_DE (AF7, 하드웨어 자동 제어)
-- DEAT/DEDT = 4 (~1μs DE 어설션/디어설션 여유, bit period 8.68μs @ 115200)
+- DEAT/DEDT = 4 (~1μs DE 어설션/디어설션 여유, bit period 4.34μs @ 230400)
 - TX 중 RX 억제: `!rs485_tx_active` guard in `SCI_ProcessHostComs()`
 - TX 완료 확인: `SCI_TxEmpty()` → UART_FLAG_TC (shift register drain)
 - PD9(RX) GPIO_PULLUP: 버스 부동 시 spurious RXNE 방지
@@ -1127,7 +1128,7 @@ STATE_ESTOP_RESTART
   └→ Timers_Start(TIMER_INIT) → STATE_INIT
 
 STATE_INIT → STATE_CALC_OFFSETS
-  ├→ 오프셋 캘리브레이션 (IIR 필터 1.0초 + ±1.05A 범위 검증)
+  ├→ 오프셋 캘리브레이션 (IIR 필터 1.0초 + ±7.05A 범위 검증)
   ├→ Flag_bypassFaultCheck = false × 2  ← ISR fault 폴링 복원 (TI PIE_enableExtInt 대체)
   └→ STATE_RUN
 ```
@@ -1245,7 +1246,7 @@ SPI3 FRAM (FM25V02A, 32KB). HW NSS (PA15): `init(&hspi3, nullptr, 0)`.
 | numCtrlTicksPerSpeedTick | 10 | ISR→속도루프 분주 |
 | USER_MAX_VS_MAG_PU | 0.5 | 최대 전압 벡터 크기 (pu) |
 | USER_OFFSET_POLE_rps | 20.0 | 오프셋 필터 극 |
-| USER_VOLTAGE_FILTER_POLE_rps | 344.62 | 전압 필터 극 |
+| USER_VOLTAGE_FILTER_POLE_rps | 1350.93 | 전압 필터 극 (= 214.97 × 2π) |
 
 ### 11.5 속도 PID 기본 게인 (SI 단위)
 
@@ -1350,7 +1351,7 @@ void BearDriver_SlowADC_Update(void);
 | **USART3 FIFO** | `usart.c` | USART3 TX FIFO 활성화: threshold=1/2, EnableFifoMode (기존 Disabled) |
 | **RS485 DE 타이밍** | `usart.c` | DEAT/DEDT: `(0,0)` → `(4,4)` (~1μs 여유 마진) |
 | **RX pull-up** | `usart.c` | PD9(USART3 RX) GPIO_PULLUP 추가: 버스 부동 spurious RXNE 방지 |
-| **TX 인터럽트 통합** | `sci_coms.cpp` | `SCI_WriteTxBuffer`: SCI_A_FD/SCI_B_FD 분기 제거 → UART_IT_TXFT 단일 경로 |
+| **TX 인터럽트 통합** | `sci_coms.cpp` | `SCI_WriteTxBuffer`: SCI_USART2/3 분기 제거 → UART_IT_TXFT 단일 경로 |
 | **TX 콜백 통합** | `sci_coms.cpp` | `SCI_TxCallback`: if/else 분기 제거 → FIFO 드레인 단일 경로 (양쪽 USART) |
 | **RX 드레인 루프** | `stm32g4xx_it.c` | USART2/3 RXNE: 단일 바이트 → while(RXNE) 드레인 루프 |
 | **USART3 TX 인터럽트** | `stm32g4xx_it.c` | UART_IT_TXE → UART_IT_TXFT (FIFO 모드 일치) |
@@ -1384,7 +1385,7 @@ void BearDriver_SlowADC_Update(void);
 | 7 | `kEncoderPhaseAngleError` | 0x0080 | 치명 | 인코더 위상각 검증 실패 |
 | 8 | `kCommunicationsError` | 0x0100 | 경고 | 통신 타임아웃 |
 | 9 | `kEStopError` | 0x0200 | 치명 | E-Stop 활성 |
-| 10 | `kOffsetCalibrationWarning` | 0x0400 | 경고 | 오프셋 캘리브레이션 범위 초과 (±1.05A), fallback(0.0A) 사용 |
+| 10 | `kOffsetCalibrationWarning` | 0x0400 | 경고 | 오프셋 캘리브레이션 범위 초과 (±7.05A), fallback(0.0A) 사용 |
 
 경고 마스크 (`kMotorErrorCodeWarnMask` = 0x0538): 경고 비트만 → 모터 계속 구동. 치명 비트 → `STATE_FAULT`.
 
@@ -1552,10 +1553,10 @@ min-max centering `vshift = -0.5(vmax+vmin)` 은 3고조파 주입과 수학적�
 |------|----|-------|
 | 모듈 | `SVGENCURRENT_compPwmData()` | **없음** |
 | 기능 1 | 데드타임 보상 (PWM 듀티 교정) | 미구현 |
-| 기능 2 | 2-shunt → 3상 전류 재구성 | 불필요 (3-shunt 고정) |
-| 전류 센싱 | 2-shunt 또는 3-shunt (모드 전환) | 3-shunt 항상 |
+| 기능 2 | 2-shunt → 3상 전류 재구성 | 불필요 (3-shunt, Phase C 직접 측정) |
+| 전류 센싱 | 2-shunt 또는 3-shunt (모드 전환) | 3-shunt 고정 (ADC3 3채널 / ADC1 3채널) |
 
-STM32 하드웨어는 3상 전류를 항상 측정하므로 재구성 불필요.
+STM32는 3-shunt 구성이며 Phase A/B/C 모두 ADC로 직접 측정한다 (Motor1: ADC3 RANK1/2/3, Motor2: ADC1 RANK1/2/3).
 단, **데드타임 보상 없음** — 데드타임이 상대적으로 긴 경우 낮은 속도에서 전류 왜형 발생 가능.
 
 ---
@@ -1567,7 +1568,7 @@ STM32 하드웨어는 3상 전류를 항상 측정하므로 재구성 불필요.
 | 방법 | SVGENCURRENT 프레임워크 내 평균 | 독립 IIR 필터 (`runOffsetsCalculation`) |
 | 필터 극점 | 20.0 rad/s (동일) | 20.0 rad/s (TI 동일) |
 | 캘리브레이션 시간 | ~1.0s | ~1.0s (TI 동일) |
-| 범위 검증 | TI 동일 | ±1.05A → 초과 시 fallback 0.0A |
+| 범위 검증 | TI 동일 | ±7.05A → 초과 시 fallback 0.0A |
 
 알고리즘 구조는 TI와 동일하게 유지되었다.
 
@@ -1606,7 +1607,7 @@ STM32 포트에서는 **제거됨** — `user_params.h`에 고정 모터 파라�
 | SVGEN | SVGEN_run() | min-max centering | **수학적 등가** |
 | SVGENCURRENT | 있음 (데드타임 보상) | **없음** | 미이식 |
 | 데드타임 보상 | 있음 | **없음** | 미이식 |
-| 3상 전류 센싱 | 2-shunt/3-shunt | 3-shunt 고정 | HW 차이 |
+| 3상 전류 센싱 | 2-shunt/3-shunt | 3-shunt (직접 측정) | HW 동일 |
 | UdOutMax (속도 D항 제한) | 없음 | **추가** | STM32 개선 |
 | capture_seen (SW 모드) | 없음 | **추가** | STM32 개선 |
 | Rs 온라인 재계산 | 있음 | **없음** | 기능 축소 |
@@ -1624,7 +1625,7 @@ STM32 Ki는 TI 대비 10× 크다. 현재 하드웨어(Rs=0.42Ω, Ls=0.88mH)에�
 
 **② 데드타임 보상 (SVGENCURRENT) 미이식**
 
-3-shunt 구성에서는 전류 재구성 불필요하지만, 데드타임에 의한 PWM 왜형 보상은 별개 문제다.
+3-shunt 구성에서는 Phase C를 직접 측정하므로 전류 재구성이 불필요하지만, 데드타임에 의한 PWM 왜형 보상은 별개 문제다.
 저속(< 10 RPM)에서 전류 리플이 크면 소프트웨어 데드타임 보상 추가를 검토한다.
 
 **③ dq 교차 결합 디커플링 검토**

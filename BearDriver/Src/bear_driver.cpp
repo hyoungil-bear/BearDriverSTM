@@ -33,6 +33,7 @@
 #include "hall_sensor.h"
 #include "bldc_motor.h"
 #include "encoder.h"
+#include "Ebrake.h"
 #include "flash_layout.h"
 #include "spi_flash.h"
 #include "version.h"
@@ -40,9 +41,10 @@
 #include "api.h"
 #include "differential_drive_limiter_helper.h"
 #include "cpu_time.h"
+#include "debug.h"
 
 #ifdef DEBUG
-#define DPRINTF(x, ...) printf(x, ##__VA_ARGS__)
+#define DPRINTF(x, ...) SCI_Printf(SCI_USART2, x, ##__VA_ARGS__)
 #define DFLUSH()
 #else
 #define DPRINTF(x, ...)
@@ -54,11 +56,11 @@ static void main_loop(void);
 static bool checkESTOP(void);
 
 /* External HAL handles (defined in Core/Src/ by CubeMX) */
-extern ADC_HandleTypeDef hadc1;   /* Motor 2 phase currents (injected, TIM1_TRGO): CH6=PhA, CH7=PhB */
-extern ADC_HandleTypeDef hadc2;   /* Motor 2 thermistor (injected, TIM1_TRGO): CH12=PB2 */
-extern ADC_HandleTypeDef hadc3;   /* Motor 1 phase A + thermistor (injected, TIM20_TRGO): CH4=PhA, CH12=Therm */
-extern ADC_HandleTypeDef hadc4;   /* Motor 1 phase B (injected, TIM20_TRGO): CH1=PhB */
-extern ADC_HandleTypeDef hadc5;   /* Bus voltage + current (regular, software): CH9=Volt, CH10=Curr */
+extern ADC_HandleTypeDef hadc1;   /* Motor 2 phase currents (injected, TIM1_TRGO): CH6=PhA, CH7=PhB, CH8=PhC */
+extern ADC_HandleTypeDef hadc2;   /* Motor 2 thermistor (regular, SW): CH12=PB2 */
+extern ADC_HandleTypeDef hadc3;   /* Motor 1 phase currents (injected, TIM20_TRGO): CH4=PhA, CH1=PhB, CH12=PhC */
+extern ADC_HandleTypeDef hadc4;   /* Motor 1 thermistor (regular,  SW): CH1=PE14 */
+extern ADC_HandleTypeDef hadc5;   /* Bus voltage + current (regular, SW): CH9=Volt, CH10=Curr */
 extern TIM_HandleTypeDef htim1;   /* Motor 1 PWM (advanced timer, TRGO -> ADC1/ADC2) */
 extern TIM_HandleTypeDef htim2;   /* Motor 2 Encoder (quadrature, PD3/PD4) */
 extern TIM_HandleTypeDef htim3;   /* Motor 1 Encoder capture (TIM3_CH2, PA4) */
@@ -81,6 +83,10 @@ bool gFlag_enableSystem = false;
 // the two motor instances
 Motor motor1(HAL_MTR1);
 Motor motor2(HAL_MTR2);
+
+// electromagnetic brake instances (DRV8871DDAR, one per motor)
+Ebrake ebrake1;  // Motor1 Right — TIM8_CH4  (PD1)
+Ebrake ebrake2;  // Motor2 Left  — TIM15_CH2 (PB15)
 Motor *gMotors[2] = {&motor1, &motor2};
 
 bool disable_motors_on_boot = true;
@@ -268,14 +274,18 @@ void BearDriver_Main(void) {
                           di_FAULT_2_GPIO_Port,   di_FAULT_2_Pin,
                           di_FLAG_2_GPIO_Port,    di_FLAG_2_Pin);
 
+  // Setup electromagnetic brakes (DRV8871DDAR, IN2=GND on PCB)
+  ebrake1.setup(&htim8,  TIM_CHANNEL_4);   // Motor1 Right — PD1  TIM8_CH4  AF4
+  ebrake2.setup(&htim15, TIM_CHANNEL_2);   // Motor2 Left  — PB15 TIM15_CH2 AF1
+
   // Initialize timers
   Timers_Init();
 
   // enable the ADC interrupts (injected conversions for motor current sensing)
-  HAL_ADCEx_InjectedStart_IT(&hadc1);   // Motor 2 currents (TIM1_TRGO)
-  HAL_ADCEx_InjectedStart(&hadc2);      // Motor 2 thermistor (TIM1_TRGO, no interrupt)
-  HAL_ADCEx_InjectedStart_IT(&hadc3);   // Motor 1 PhA + thermistor (TIM20_TRGO)
-  HAL_ADCEx_InjectedStart(&hadc4);      // Motor 1 PhB (TIM20_TRGO, no interrupt)
+  HAL_ADCEx_InjectedStart_IT(&hadc1);   // Motor 2 currents A/B/C (TIM1_TRGO, interrupt)
+  HAL_ADCEx_InjectedStart_IT(&hadc3);   // Motor 1 currents A/B/C (TIM20_TRGO, interrupt)
+  HAL_ADC_Start(&hadc2);                  // prime Motor2 thermistor regular conversion
+  HAL_ADC_Start(&hadc4);                  // prime Motor1 thermistor regular conversion (SW)
   HAL_ADC_Start(&hadc5);                // prime first Vbus regular conversion
 
   // Start encoder timers
@@ -381,6 +391,7 @@ static void main_loop(void) {
       if (motor_hd_version != MOTOR_HW_VERSION_15) {
         if (main_state != STATE_SS2_ESTOP) {
           DPRINTF("\nSS2_ESTOP ON\n");
+          Debug_LED_Err_Set(true);
         }
 
         motor1.Flag_Run_Identify = true;
@@ -390,6 +401,8 @@ static void main_loop(void) {
       } else {
         if (main_state != STATE_ESTOP) {
           DPRINTF("\nSTO_ESTOP ON\n");
+          Debug_LED_Err_Set(true);
+          Timers_SetLedBlinkRate(LED_FAST);
         }
 
         disableMotors();  // also asserts SD on both STDRIVE102BH
@@ -519,10 +532,14 @@ static void main_loop(void) {
              motor2.IsErrorFlagSet(Motor::kStallError)) &&
             stall_lock_enable) {
           DPRINTF("\nSTALL LOCK\n");
+          Debug_LED_Err_Set(true);
+          Timers_SetLedBlinkRate(LED_FAST);
           main_state = STATE_STALL_LOCK;
         } else {
           disableMotors();
           DPRINTF("\nFAULT\n");
+          Debug_LED_Err_Set(true);
+          Timers_SetLedBlinkRate(LED_FAST);
           main_state = STATE_FAULT;
         }
       }
@@ -549,6 +566,7 @@ static void main_loop(void) {
           motor2.Flag_Run_Identify = motor2.Flag_Run_Identify_cmd;
 
           main_state = STATE_RUN;
+          Debug_LED_Err_Set(false);
 
           DPRINTF("\nSTATE->RUN (after SS2_ESTOP)\n");
         }
@@ -649,6 +667,8 @@ static void main_loop(void) {
       // start re-initialization timer
       Timers_Start(TIMER_INIT);
       main_state = STATE_INIT;
+      Debug_LED_Err_Set(false);
+      Timers_SetLedBlinkRate(LED_FAST);
       DPRINTF("\nSTATE->INIT\n");
 
       break;
@@ -720,28 +740,32 @@ extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 extern "C" void Motor1_ADC_ReadAndISR(void) {
   CPU_TIME_start(&cpu_time_m1);
 
-  // Motor 1: 2-shunt configuration
-  //   ADC3 Injected Rank1 = CH4 (PE7) = Phase A
-  //   ADC4 Injected Rank1 = CH1 (PE14) = Phase B
-  //   Phase C = -(Phase A + Phase B)  (Kirchhoff)
-  // ADC3 Rank2 = CH12 (PB1) = Thermistor_1 (read here for timing)
+  // Motor 1: 3-shunt configuration
+  //   ADC3 Injected Rank1 = CH4  (PE7, ai_OA_OA_1) = Phase A
+  //   ADC3 Injected Rank2 = CH1  (PB1, ai_OA_OB_1) = Phase B
+  //   ADC3 Injected Rank3 = CH12 (PB0, ai_OA_OC_1) = Phase C
+  //   ADC4 Injected Rank1 = CH1  (PE14, ai_Thermistor_1) = Thermistor
   // Convert ADC raw → Amperes with Vref/2 offset removal:
   //   I [A] = ((raw - 2048) / 4096) × ADC_TO_AMPS
   //   12-bit ADC, right-aligned → raw 0–4095, mid-point 2048 = 1.65V bias.
+  //   ADC_TO_AMPS = Vref / (Rshunt × Gain) = 3.3 / (0.004 × 10) = 82.5  →  range ±41.25 A
   constexpr float kAdcRawToAmps = ADC_TO_AMPS / 4096.0f;
   constexpr float kAdcMidScale  = 2048.0f;  // Vref/2 hardware bias (R19/R20 divider)
   motor1.Iabc_A.value[0] =
       ((float)HAL_ADCEx_InjectedGetValue(&hadc3, ADC_INJECTED_RANK_1) - kAdcMidScale) * kAdcRawToAmps;
   motor1.Iabc_A.value[1] =
-      ((float)HAL_ADCEx_InjectedGetValue(&hadc4, ADC_INJECTED_RANK_1) - kAdcMidScale) * kAdcRawToAmps;
+      ((float)HAL_ADCEx_InjectedGetValue(&hadc3, ADC_INJECTED_RANK_2) - kAdcMidScale) * kAdcRawToAmps;
   motor1.Iabc_A.value[2] =
-      -(motor1.Iabc_A.value[0] + motor1.Iabc_A.value[1]);
-
-  // Thermistor_1: ADC3 injected rank2 (PB1)
-  motor1.adcData.temperature_adc =
-      HAL_ADCEx_InjectedGetValue(&hadc3, ADC_INJECTED_RANK_2);
+      ((float)HAL_ADCEx_InjectedGetValue(&hadc3, ADC_INJECTED_RANK_3) - kAdcMidScale) * kAdcRawToAmps;
 
   Motor1_ISR_Handler();
+
+  /* DAC debug output — CH1: SpeedTraj_rpm, CH2: Speed_rpm
+   * Scale: -100 RPM → 0 V,  0 RPM → 1.65 V,  +100 RPM → 3.3 V       */
+  constexpr float kDacSpdScale  = (DBG_DAC_VREF_V * 0.5f) / 100.0f;
+  constexpr float kDacSpdOffset = DBG_DAC_VREF_V * 0.5f;
+  Debug_DAC_SetVoltage(1, motor1.SpeedTraj_rpm * kDacSpdScale, kDacSpdOffset);
+  Debug_DAC_SetVoltage(2, motor1.Speed_rpm     * kDacSpdScale, kDacSpdOffset);
 
   CPU_TIME_end(&cpu_time_m1);
 }
@@ -749,13 +773,14 @@ extern "C" void Motor1_ADC_ReadAndISR(void) {
 extern "C" void Motor2_ADC_ReadAndISR(void) {
   CPU_TIME_start(&cpu_time_m2);
 
-  // Motor 2: 2-shunt configuration
-  //   ADC1 Injected Rank1 = CH6 (PC0) = Phase A
-  //   ADC1 Injected Rank2 = CH7 (PC1) = Phase B
-  //   Phase C = -(Phase A + Phase B)  (Kirchhoff)
+  // Motor 2: 3-shunt configuration
+  //   ADC1 Injected Rank1 = CH6 (PC0, ai_OA_OA_2) = Phase A
+  //   ADC1 Injected Rank2 = CH7 (PC1, ai_OA_OB_2) = Phase B
+  //   ADC1 Injected Rank3 = CH8 (PC2, ai_OA_OC_2) = Phase C
   // Convert ADC raw → Amperes with Vref/2 offset removal:
   //   I [A] = ((raw - 2048) / 4096) × ADC_TO_AMPS
   //   12-bit ADC, right-aligned → raw 0–4095, mid-point 2048 = 1.65V bias.
+  //   ADC_TO_AMPS = Vref / (Rshunt × Gain) = 3.3 / (0.004 × 10) = 82.5  →  range ±41.25 A
   constexpr float kAdcRawToAmps = ADC_TO_AMPS / 4096.0f;
   constexpr float kAdcMidScale  = 2048.0f;  // Vref/2 hardware bias (R19/R20 divider)
   motor2.Iabc_A.value[0] =
@@ -763,11 +788,7 @@ extern "C" void Motor2_ADC_ReadAndISR(void) {
   motor2.Iabc_A.value[1] =
       ((float)HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_2) - kAdcMidScale) * kAdcRawToAmps;
   motor2.Iabc_A.value[2] =
-      -(motor2.Iabc_A.value[0] + motor2.Iabc_A.value[1]);
-
-  // Thermistor_2: ADC2 injected rank1 (PB2), triggered same time as ADC1
-  motor2.adcData.temperature_adc =
-      HAL_ADCEx_InjectedGetValue(&hadc2, ADC_INJECTED_RANK_1);
+      ((float)HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_3) - kAdcMidScale) * kAdcRawToAmps;
 
   Motor2_ISR_Handler();
 
@@ -786,15 +807,42 @@ extern "C" void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef *hadc) {
 }
 
 extern "C" void BearDriver_SlowADC_Update(void) {
-  // Read bus voltage/current from ADC5 (regular, software triggered)
-  // ADC5 Rank1 = CH9 (PD12) = Voltage, Rank2 = CH10 (PD13) = Current
-  // Pattern: read-then-start — no callback, no DMA.
-  float dcBus_raw = adcToFloat(HAL_ADC_GetValue(&hadc5));
+  // Sequential poll-and-read for ADC5 scan (2 ranks).
+  // Reading DR after each rank clears EOC, preventing OVR on Rank2.
+  // Blocks ~2–4 µs total (acceptable in 1 ms SysTick context).
+
+  // Bus voltage + bus current: ADC5 Rank1=CH9(PD12, ai_Voltage), Rank2=CH10(PD13, ai_Current)
+  HAL_ADC_Start(&hadc5);
+
+  // Rank1: bus voltage
+  HAL_ADC_PollForConversion(&hadc5, 2);
+  float dcBus_raw = adcToFloat(HAL_ADC_GetValue(&hadc5));  // clears EOC → allows Rank2 to write DR
   float dcBus_V   = dcBus_raw * VBUS_ADC_TO_VOLT;
   motor1.adcData.dcBus = dcBus_raw;
   motor1.VdcBus_Volt   = dcBus_V;
   motor2.adcData.dcBus = dcBus_raw;
   motor2.VdcBus_Volt   = dcBus_V;
-  // Start next regular conversion (result available at next SysTick, ~1ms later)
-  HAL_ADC_Start(&hadc5);
+
+  // Rank2: bus current (ACS71240LLCBTR-050B3, ±50A, VIOUT=VCC/2 at 0A, 26.4 mV/A)
+  HAL_ADC_PollForConversion(&hadc5, 2);
+  float viout  = adcToFloat(HAL_ADC_GetValue(&hadc5)) * ADC_REFERENCE_VOLTAGE;
+  float ibus_A = (viout - ACS71240_ZERO_CURRENT_V) / ACS71240_SENSITIVITY_V_PER_A;
+  motor1.adcData.IBus_A = ibus_A;
+  motor2.adcData.IBus_A = ibus_A;
+
+  // Thermistor_1: ADC4 regular SW CH1 (PE14, ai_Thermistor_1)
+  motor1.adcData.temperature_adc = HAL_ADC_GetValue(&hadc4);
+  HAL_ADC_Start(&hadc4);
+
+  // Thermistor_2: ADC2 regular CH12 (PB2, ai_Thermistor_2)
+  motor2.adcData.temperature_adc = HAL_ADC_GetValue(&hadc2);
+  HAL_ADC_Start(&hadc2);
+
+  // Electromagnetic brake voltage control at 10 ms rate (Vbus LPF τ≈1s, phase transition)
+  static uint8_t brake_ctrl_cnt = 0;
+  if (++brake_ctrl_cnt >= 10U) {
+    brake_ctrl_cnt = 0;
+    ebrake1.runVoltageControl(motor1.VdcBus_Volt);
+    ebrake2.runVoltageControl(motor2.VdcBus_Volt);
+  }
 }

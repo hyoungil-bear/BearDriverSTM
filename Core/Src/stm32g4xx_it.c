@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "gpio.h"
+#include "usart.h"
 #include <stdint.h>
 #include "stm32g4xx_hal.h"
 #include "sci_coms.h"
@@ -56,6 +57,7 @@ volatile uint32_t ISR_TIM5_Count = 0;
 volatile uint32_t ISR_TIM20_BRK_Count = 0;
 volatile uint32_t ISR_TIM3_Count = 0;
 volatile uint32_t ISR_TIM4_Count = 0;
+volatile uint32_t ISR_USART1_Count = 0;
 volatile uint32_t ISR_USART2_Count = 0;
 volatile uint32_t ISR_USART3_Count = 0;
 /* USER CODE END PV */
@@ -87,6 +89,7 @@ extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim5;
 extern TIM_HandleTypeDef htim15;
 extern TIM_HandleTypeDef htim20;
+extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart3;
 /* USER CODE BEGIN EV */
@@ -196,6 +199,50 @@ void TIM2_IRQHandler(void)
 }
 
 /**
+  * @brief This function handles USART1 global interrupt / USART1 wake-up interrupt through EXTI line 25.
+  */
+void USART1_IRQHandler(void)
+{
+  /* USER CODE BEGIN USART1_IRQn 0 */
+  ISR_USART1_Count++;
+
+  /* Clear error flags (ORE, FE, NE, PE) to prevent re-entry loop */
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE)) {
+    __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_OREF);
+  }
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_FE)) {
+    __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF);
+  }
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_NE)) {
+    __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
+  }
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_PE)) {
+    __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_PEF);
+  }
+
+  /* RXNE: receive byte (no FIFO — each byte triggers interrupt) */
+  if (__HAL_UART_GET_IT_SOURCE(&huart1, UART_IT_RXNE)) {
+    while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE)) {
+      uint8_t data = (uint8_t)(huart1.Instance->RDR & 0xFFU);
+      SCI_RxCallback(SCI_USART1, data);
+    }
+  }
+
+  /* TXE: TX data register empty (no FIFO mode) */
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TXE) &&
+      __HAL_UART_GET_IT_SOURCE(&huart1, UART_IT_TXE)) {
+    SCI_TxCallback(SCI_USART1);
+  }
+
+  return;  /* Skip HAL generic handler — SCI manages its own buffers */
+  /* USER CODE END USART1_IRQn 0 */
+  HAL_UART_IRQHandler(&huart1);
+  /* USER CODE BEGIN USART1_IRQn 1 */
+
+  /* USER CODE END USART1_IRQn 1 */
+}
+
+/**
   * @brief This function handles USART2 global interrupt / USART2 wake-up interrupt through EXTI line 26.
   */
 void USART2_IRQHandler(void)
@@ -221,14 +268,14 @@ void USART2_IRQHandler(void)
   if (__HAL_UART_GET_IT_SOURCE(&huart2, UART_IT_RXNE)) {
     while (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_RXNE)) {
       uint8_t data = (uint8_t)(huart2.Instance->RDR & 0xFFU);
-      SCI_RxCallback(SCI_A_FD, data);
+      SCI_RxCallback(SCI_USART2, data);
     }
   }
 
   /* TXFT: TX FIFO threshold — fill up to 8 bytes per interrupt */
   if (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_TXFT) &&
       __HAL_UART_GET_IT_SOURCE(&huart2, UART_IT_TXFT)) {
-    SCI_TxCallback(SCI_A_FD);
+    SCI_TxCallback(SCI_USART2);
   }
 
   return;  /* Skip HAL generic handler — SCI manages its own buffers */
@@ -265,14 +312,14 @@ void USART3_IRQHandler(void)
   if (__HAL_UART_GET_IT_SOURCE(&huart3, UART_IT_RXNE)) {
     while (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_RXNE)) {
       uint8_t data = (uint8_t)(huart3.Instance->RDR & 0xFFU);
-      SCI_RxCallback(SCI_B_FD, data);
+      SCI_RxCallback(SCI_USART3, data);
     }
   }
 
   /* TXFT: TX FIFO threshold — fill up to 8 bytes per interrupt */
   if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_TXFT) &&
       __HAL_UART_GET_IT_SOURCE(&huart3, UART_IT_TXFT)) {
-    SCI_TxCallback(SCI_B_FD);
+    SCI_TxCallback(SCI_USART3);
   }
 
   return;  /* Skip HAL generic handler -- SCI manages its own buffers */

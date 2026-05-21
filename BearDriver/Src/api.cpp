@@ -464,8 +464,8 @@ static uint16_t cmd_idx = 0;
 
 void API_ProcessDebugComs(void) {
   // Read characters from debug UART (SCI_A)
-  while (SCI_RxAvailable(SCI_A_FD)) {
-    int16_t c = SCI_GetChar(SCI_A_FD);
+  while (SCI_RxAvailable(SCI_USART2)) {
+    int16_t c = SCI_GetChar(SCI_USART2);
     if (c < 0) break;
 
     switch (c) {
@@ -473,9 +473,9 @@ void API_ProcessDebugComs(void) {
       case 8:    // backspace
         if (cmd_idx > 0) {
           cmd_idx--;
-          SCI_PutChar(SCI_A_FD, 8);
-          SCI_PutChar(SCI_A_FD, ' ');
-          SCI_PutChar(SCI_A_FD, 8);
+          SCI_PutChar(SCI_USART2, 8);
+          SCI_PutChar(SCI_USART2, ' ');
+          SCI_PutChar(SCI_USART2, 8);
         }
         break;
 
@@ -498,7 +498,7 @@ void API_ProcessDebugComs(void) {
 
       default:
         if (cmd_idx < CMD_BUFFER_LEN - 1) {
-          SCI_PutChar(SCI_A_FD, (uint8_t)c);
+          SCI_PutChar(SCI_USART2, (uint8_t)c);
           cmd_buffer[cmd_idx++] = (char)c;
         }
         break;

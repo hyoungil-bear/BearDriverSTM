@@ -40,8 +40,9 @@ extern "C" {
   */
 typedef enum
 {
-  SCI_A_FD = 0,    /*!< USART2 - Debug/STM bootloader (921600 baud) */
-  SCI_B_FD = 1     /*!< USART3 - RS485 API (115200 baud) */
+  SCI_USART1 = 0,  /*!< USART1 - STM bootloader (115200 baud) */
+  SCI_USART2 = 1,  /*!< USART2 - Debug (921600 baud) */
+  SCI_USART3 = 2   /*!< USART3 - RS485 API (230400 baud) */
 } SCI_Device_e;
 
 /**
@@ -57,8 +58,9 @@ typedef enum
 /* Exported constants --------------------------------------------------------*/
 
 /* Baud rates */
-#define SCIA_BAUD_RATE      921600U   /*!< USB debug/STM bootloader */
-#define SCIB_BAUD_RATE      115200U   /*!< RS485 API */
+#define USART1_BAUD_RATE    115200U   /*!< STM bootloader */
+#define USART2_BAUD_RATE    921600U   /*!< USB debug */
+#define USART3_BAUD_RATE    230400U   /*!< RS485 API */
 
 /* Buffer sizes (must be power of 2) */
 #define SIZE_RX_BUFFER      128U      /*!< Receive buffer size */
@@ -92,17 +94,17 @@ extern volatile uint32_t base_com_check_timer_10ms;
 /**
   * @brief  RX/TX buffer indices (volatile, written by ISR; read by main loop)
   */
-extern volatile uint16_t rx_isr_in_idx[2];
-extern volatile uint16_t rx_isr_out_idx[2];
-extern volatile uint16_t tx_isr_in_idx[2];
-extern volatile uint16_t tx_isr_out_idx[2];
+extern volatile uint16_t rx_isr_in_idx[3];
+extern volatile uint16_t rx_isr_out_idx[3];
+extern volatile uint16_t tx_isr_in_idx[3];
+extern volatile uint16_t tx_isr_out_idx[3];
 
 /**
   * @brief  Error counters (watchable in debugger)
   */
-extern uint32_t SCI_RxOverflow[2];   /*!< RX ring buffer overflow (ISR dropped bytes) */
-extern uint32_t SCI_CrcErrors[2];    /*!< CRC mismatch on received packet */
-extern uint32_t SCI_SlipErrors[2];   /*!< SLIP decode error (overflow / bad escape / restart) */
+extern uint32_t SCI_RxOverflow[3];   /*!< RX ring buffer overflow (ISR dropped bytes) */
+extern uint32_t SCI_CrcErrors[3];    /*!< CRC mismatch on received packet */
+extern uint32_t SCI_SlipErrors[3];   /*!< SLIP decode error (overflow / bad escape / restart) */
 
 /* Exported functions prototypes ---------------------------------------------*/
 
@@ -114,7 +116,7 @@ void SCI_Init(void);
 
 /**
   * @brief  Initialize specific UART device
-  * @param  dev: Device identifier (SCI_A_FD or SCI_B_FD)
+  * @param  dev: Device identifier (SCI_USART2 or SCI_USART3)
   * @retval None
   */
 void SCI_Device_Init(SCI_Device_e dev);
@@ -210,7 +212,7 @@ void SCI_TxCallback(SCI_Device_e dev);
 
 /**
   * @brief  Printf-style formatted output to SCI device (debug)
-  * @param  dev: Device identifier (SCI_A_FD for debug)
+  * @param  dev: Device identifier (SCI_USART2 for debug)
   * @param  fmt: printf format string
   * @retval None
   */

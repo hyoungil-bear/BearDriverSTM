@@ -75,8 +75,6 @@ void Error_Handler(void);
 #define ai_OA_OB_2_GPIO_Port GPIOC
 #define ai_OA_OC_2_Pin GPIO_PIN_2
 #define ai_OA_OC_2_GPIO_Port GPIOC
-#define ai_Vref_Pin GPIO_PIN_3
-#define ai_Vref_GPIO_Port GPIOC
 #define po_INH3_2_Pin GPIO_PIN_2
 #define po_INH3_2_GPIO_Port GPIOF
 #define di_EQEPA_1_Pin GPIO_PIN_0
@@ -101,8 +99,8 @@ void Error_Handler(void);
 #define do_nSTBY_1_GPIO_Port GPIOC
 #define ai_OA_OC_1_Pin GPIO_PIN_0
 #define ai_OA_OC_1_GPIO_Port GPIOB
-#define ai_Thermistor_1_Pin GPIO_PIN_1
-#define ai_Thermistor_1_GPIO_Port GPIOB
+#define ai_OA_OB_1_Pin GPIO_PIN_1
+#define ai_OA_OB_1_GPIO_Port GPIOB
 #define ai_Thermistor_2_Pin GPIO_PIN_2
 #define ai_Thermistor_2_GPIO_Port GPIOB
 #define ai_OA_OA_1_Pin GPIO_PIN_7
@@ -119,8 +117,8 @@ void Error_Handler(void);
 #define po_INL3_1_GPIO_Port GPIOE
 #define po_INH3_1_Pin GPIO_PIN_13
 #define po_INH3_1_GPIO_Port GPIOE
-#define ai_OA_OB_1_Pin GPIO_PIN_14
-#define ai_OA_OB_1_GPIO_Port GPIOE
+#define ai_Thermistor_1_Pin GPIO_PIN_14
+#define ai_Thermistor_1_GPIO_Port GPIOE
 #define di_FAULT_1_Pin GPIO_PIN_15
 #define di_FAULT_1_GPIO_Port GPIOE
 #define di_FLAG_1_Pin GPIO_PIN_10

@@ -21,7 +21,7 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
-#include "sci_coms.h"  /* SCIA_BAUD_RATE, SCIB_BAUD_RATE defines */
+#include "sci_coms.h"  /* USART2_BAUD_RATE, USART3_BAUD_RATE defines */
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart1;
@@ -68,7 +68,9 @@ void MX_USART1_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
-
+  /* Safety net: re-apply USART1_BAUD_RATE in case CubeMX regeneration changes it */
+  huart1.Init.BaudRate = USART1_BAUD_RATE;
+  if (HAL_UART_Init(&huart1) != HAL_OK) { Error_Handler(); }
   /* USER CODE END USART1_Init 2 */
 
 }
@@ -112,8 +114,8 @@ void MX_USART2_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART2_Init 2 */
-  /* Safety net: re-apply SCIA_BAUD_RATE in case CubeMX regeneration changes it */
-  huart2.Init.BaudRate = SCIA_BAUD_RATE;
+  /* Safety net: re-apply USART2_BAUD_RATE in case CubeMX regeneration changes it */
+  huart2.Init.BaudRate = USART2_BAUD_RATE;
   if (HAL_UART_Init(&huart2) != HAL_OK) { Error_Handler(); }
   /* Enable TX FIFO: threshold = 1/2 (4 bytes) — reduces ISR rate ~4x vs byte-by-byte */
   if (HAL_UARTEx_SetTxFifoThreshold(&huart2, UART_TXFIFO_THRESHOLD_1_2) != HAL_OK) { Error_Handler(); }
@@ -161,8 +163,8 @@ void MX_USART3_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART3_Init 2 */
-  /* Safety net: re-apply SCIB_BAUD_RATE, RS485 DE timing, and FIFO in case CubeMX regeneration changes them */
-  huart3.Init.BaudRate = SCIB_BAUD_RATE;
+  /* Safety net: re-apply USART3_BAUD_RATE, RS485 DE timing, and FIFO in case CubeMX regeneration changes them */
+  huart3.Init.BaudRate = USART3_BAUD_RATE;
   if (HAL_RS485Ex_Init(&huart3, UART_DE_POLARITY_HIGH, 4, 4) != HAL_OK)
   {
     Error_Handler();
@@ -314,6 +316,8 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
     */
     HAL_GPIO_DeInit(GPIOA, uart1_Base_TX_Pin|uart1_Base_RX_Pin);
 
+    /* USART1 interrupt Deinit */
+    HAL_NVIC_DisableIRQ(USART1_IRQn);
   /* USER CODE BEGIN USART1_MspDeInit 1 */
 
   /* USER CODE END USART1_MspDeInit 1 */
